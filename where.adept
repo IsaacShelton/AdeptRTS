@@ -1,5 +1,5 @@
 
-import '2.2/math.adept'
+import '2.2/basics.adept'
 
 #if __windows__
     func getExecutableLocation String {
@@ -41,8 +41,5 @@ func where String {
         return ""
     }
     
-    // HACK: Compiler does deference before return statement so we have to
-    // store the result beforehand
-    result POD String = executable.sub(0, (last_slash + 1) as usize)
-    return result
+    return executable.sub(0, (last_slash + 1) as usize)
 }

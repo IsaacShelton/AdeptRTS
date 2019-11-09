@@ -3,16 +3,19 @@
 #set multiple_raiders false
 #set multiple_marksmen false
 #set multiple_guardians false
-#set fullscreen true
+#set enable_developer_features false
+#set fullscreen false
 
 import '2.2/List.adept'
 import '2.2/captain.adept'
-
 import 'posix/pthread.adept'
 
 import 'Text.adept'
 import 'Turn.adept'
+import 'Unit.adept'
+import 'Building.adept'
 import 'NetworkStream.adept'
+
 import 'commands.adept'
 import 'networking.adept'
 import 'where.adept'
@@ -24,18 +27,10 @@ struct Textures (
     range, range_blue, range_red,
     club, club_blue, club_red,
     emptyIcon,
-    workerIcon,
-    scoutIcon,
-    mineIcon,
-    outpostIcon,
-    rangeIcon,
-    clubIcon,
-    raiderIcon,
-    marksmenIcon,
-    guardianIcon,
-    select,
-    health,
-    progress,
+    workerIcon, scoutIcon, mineIcon,
+    outpostIcon, rangeIcon, clubIcon,
+    raiderIcon, marksmenIcon, guardianIcon,
+    select, health, progress,
     scout,
     raider, raider_blue, raider_red, raider_attack, raider_attack_blue, raider_attack_red,
     marksmen, marksmen_blue, marksmen_red, marksmen_attack, marksmen_attack_blue, marksmen_attack_red,
@@ -85,177 +80,6 @@ struct GameData (
     networking_error_when double,
     istream, ostream NetworkStream
 )
-
-alias UnitID = usize
-enum BuildingKind (MINE, OUTPOST, RANGE, CLUB)
-enum UnitKind (SCOUT, RAIDER, MARKSMEN, GUARDIAN)
-
-struct Building (kind BuildingKind, texture CaptTexture, x, y, w, h float, health, max_health, team int, progress float)
-func building(kind BuildingKind, team int) Building {
-    building POD Building = undef
-    building.kind = kind
-    
-    switch kind {
-    case BuildingKind::MINE
-        building.texture = team == 1 ? textures.mine_blue : textures.mine_red
-        building.health = 100
-        building.w = 24.0f * 2.0f
-        building.h = 12.0f * 2.0f
-    case BuildingKind::OUTPOST
-        building.texture = team == 1 ? textures.outpost_blue : textures.outpost_red
-        building.health = 100
-        building.w = 30.0f * 2.0f
-        building.h = 38.0f * 2.0f
-    case BuildingKind::RANGE
-        building.texture = team == 1 ? textures.range_blue : textures.range_red
-        building.health = 100
-        building.w = 40.0f * 2.0f
-        building.h = 14.0f * 2.0f
-    case BuildingKind::CLUB
-        building.texture = team == 1 ? textures.club_blue : textures.club_red
-        building.health = 100
-        building.w = 36.0f * 2.0f
-        building.h = 18.0f * 2.0f
-    default
-        building.texture = textures.mine
-        building.health = 100
-        building.w = 24.0f * 2.0f
-        building.h = 12.0f * 2.0f
-    }
-    
-    building.x = 0.0f
-    building.y = 0.0f
-    building.max_health = building.health
-    building.team = team
-    building.progress = 0.0f
-    return building
-}
-
-struct Unit (
-    id usize,
-    kind UnitKind,
-    texture CaptTexture,
-    x, y, w, h, speed, targetX, targetY float,
-    health, max_health, team int,
-    moving, force_move bool,
-    
-    attack_texture CaptTexture,
-    attack_x_offset, attack_y_offset, attack_w, attack_h float,
-    attack_cooldown, attack_max_cooldown usize,
-    attack_active, attack_max_active usize,
-    attack_damage int
-) {
-    func moveTo(xWorld, yWorld float, force_move bool) {
-        this.targetX = xWorld
-        this.targetY = yWorld
-        this.moving = true
-        this.force_move = force_move
-    }
-    
-    func tickAnimation {
-        if this.attack_active {
-            if --this.attack_active == 0 {
-                this.attack_cooldown = this.attack_max_cooldown
-            }
-        } else {
-            if this.attack_cooldown > 0, this.attack_cooldown--
-        }
-    }
-    
-    func attemptAttack successful {
-        if this.attack_active == 0 && this.attack_cooldown == 0, this.attack_active = this.attack_max_active; return true
-        return false
-    }
-    
-    func draw {
-        if this.attack_active == 0 {
-            drawTexture(this.texture, this.x - gamedata.cameraX, this.y - gamedata.cameraY, this.w, this.h, this.health as float / this.max_health as float, 0.0f)
-        } else {
-            drawTexture(this.attack_texture, this.x - gamedata.cameraX + this.attack_x_offset, this.y - gamedata.cameraY + this.attack_y_offset,
-                this.attack_w, this.attack_h, this.health as float / this.max_health as float, 0.0f)
-        }
-    }
-}
-
-func unit(kind UnitKind, x, y float, team int) Unit {
-    unit POD Unit = undef
-    unit.id = nextId()
-    unit.kind = kind
-    
-    switch kind {
-    case UnitKind::RAIDER
-        unit.texture = team == 1 ? textures.raider_blue : textures.raider_red
-        unit.w = 10.0f * 2.0f
-        unit.h = 12.0f * 2.0f
-        unit.speed = 4.0f
-        unit.health = 15
-        
-        unit.attack_texture = team == 1 ? textures.raider_attack_blue : textures.raider_attack_red
-        unit.attack_x_offset = 0.0f
-        unit.attack_y_offset = 0.0f
-        unit.attack_w = 11.0f * 2.0f
-        unit.attack_h = 11.0f * 2.0f
-        unit.attack_max_cooldown = 30
-        unit.attack_max_active = 5
-        unit.attack_damage = 5
-    case UnitKind::MARKSMEN
-        unit.texture = team == 1 ? textures.marksmen_blue : textures.marksmen_red
-        unit.w = 8.0f * 2.0f
-        unit.h = 12.0f * 2.0f
-        unit.speed = 3.0f
-        unit.health = 10
-        
-        unit.attack_texture = team == 1 ? textures.marksmen_attack_blue : textures.marksmen_attack_red
-        unit.attack_x_offset = 0.0f
-        unit.attack_y_offset = 0.0f
-        unit.attack_w = 7.0f * 2.0f
-        unit.attack_h = 11.0f * 2.0f
-        unit.attack_max_cooldown = 120
-        unit.attack_max_active = 5
-        unit.attack_damage = 20
-    case UnitKind::GUARDIAN
-        unit.texture = team == 1 ? textures.guardian_blue : textures.guardian_red
-        unit.w = 10.0f * 2.0f
-        unit.h = 12.0f * 2.0f
-        unit.speed = 2.0f
-        unit.health = 20
-        
-        unit.attack_texture = team == 1 ? textures.guardian_attack_blue : textures.guardian_attack_red
-        unit.attack_x_offset = 0.0f
-        unit.attack_y_offset = 0.0f
-        unit.attack_w = 14.0f * 2.0f
-        unit.attack_h = 12.0f * 2.0f
-        unit.attack_max_cooldown = 60
-        unit.attack_max_active = 5
-        unit.attack_damage = 15
-    default
-        unit.texture = textures.raider
-        unit.w = 10.0f * 2.0f
-        unit.h = 12.0f * 2.0f
-        unit.speed = 4.0f
-        unit.health = 15
-        
-        unit.attack_texture = unit.texture
-        unit.attack_x_offset = 0.0f
-        unit.attack_y_offset = 0.0f
-        unit.attack_w = unit.w
-        unit.attack_h = unit.h
-        unit.attack_max_cooldown = 30
-        unit.attack_max_active = 5
-        unit.attack_damage = 5
-    }
-    
-    unit.x = x
-    unit.y = y
-    unit.targetX = x
-    unit.targetY = y
-    unit.max_health = unit.health
-    unit.team = team
-    unit.moving = false
-    unit.attack_cooldown = 0
-    unit.attack_active = 0
-    return unit
-}
 
 textures Textures
 gamedata GameData
@@ -759,6 +583,7 @@ func tick {
             gamedata.winner = 2
             gamedata.winner_text.destroy()
             gamedata.winner_text = text("red wins", 20.0f)
+            gamedata.is_selecting = false
         }
     }
     
@@ -770,6 +595,7 @@ func tick {
             gamedata.winner = 1
             gamedata.winner_text.destroy()
             gamedata.winner_text = text("blue wins", 20.0f)
+            gamedata.is_selecting = false
         }
     }
     
@@ -913,9 +739,11 @@ func onKey(key, scancode, action, mods int) {
             gamedata.actions.addMakeCommand(gamedata.team, UnitKind::GUARDIAN)
         case GLFW_KEY_ESCAPE, gamedata.is_placing = false
         
+        #if enable_developer_features
         case GLFW_KEY_TAB, gamedata.team = gamedata.team == 1 ? 2 : 1
         case GLFW_KEY_BACKSLASH, gamedata.artificial_wait = !gamedata.artificial_wait
         case GLFW_KEY_ENTER, gamedata.show_tick_id = !gamedata.show_tick_id
+        #end
         }
         
         repeat 9, if key == GLFW_KEY_1 + idx {
@@ -968,7 +796,7 @@ func onDraw {
     if gamedata.is_placing {
         captMouseViewPosition(undef mouseX float, undef mouseY float)
         captDrawOpacity(0.5f)
-        drawTexture(gamedata.placing.texture, mouseX - gamedata.placing.w / 2.0f, mouseY - gamedata.placing.h / 2.0f, gamedata.placing.w, gamedata.placing.h, 0.0f, 0.0f)
+        drawTexture(gamedata.placing.texture, mouseX - gamedata.placing.w / 2.0f, mouseY - gamedata.placing.h / 2.0f, gamedata.placing.w, gamedata.placing.h, 1.0f, 0.0f)
         captDrawOpacity(1.0f)
     }
     
