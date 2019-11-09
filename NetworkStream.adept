@@ -1,0 +1,111 @@
+
+import 'posix/pthread.adept'
+
+struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t) {
+    func create {
+        this.buffer = null
+        this.length = 0
+        pthread_mutex_init(&this.mutex, null)
+    }
+    
+    func destroy {
+        pthread_mutex_destroy(&this.mutex)
+        delete this.buffer
+    }
+    
+    func clear {
+        this.lock()
+        delete this.buffer
+        this.buffer = null
+        this.length = 0
+        this.unlock()
+    }
+    
+    func read(out allocated **ubyte, out length *usize) successful {
+        // Returns an allocated buffer of the next frame's contents if available, otherwise 'null'
+        
+        // Ensure we have a frame available
+        if !this.peekFrame(undef bytes uint) || this.length < sizeof uint + bytes as usize {
+            *length = 0
+            return false
+        }
+        
+        // Eat frame header
+        this.advance(sizeof uint)
+        
+        // Special case for zero length frames
+        if bytes == 0, *length = 0; *allocated = null; return true
+        
+        // Read frame contents into buffer
+        buffer *ubyte = new ubyte * bytes
+        unless this.readRaw(buffer, bytes) {
+            printf('ERROR: NetworkStream.read() unreachable state\n')
+            delete buffer
+            return false
+        }
+        
+        *allocated = buffer
+        *length = bytes
+        return true
+    }
+    
+    func write(in data *ubyte, in data_length usize) {
+        this.writeFrame(data_length)
+        this.writeRaw(data, data_length)
+    }
+    
+    func readRaw(out data *ubyte, in data_length usize) successful {
+        this.lock()
+        
+        if this.length < data_length, this.unlock(); return false
+        memcpy(data, this.buffer, data_length)
+        
+        this.unlock()
+        this.advance(data_length)
+        return true
+    }
+    
+    func writeRaw(in data *ubyte, in data_length usize) {
+        this.lock()
+        this.buffer = realloc(this.buffer, this.length + data_length)
+        memcpy(this.buffer at this.length, data, data_length)
+        this.length += data_length
+        this.unlock()
+    }
+    
+    func peekFrame(out res *uint) successful {
+        // Returns size of next frame if available, otherwise 0
+        this.lock()
+        defer this.unlock()
+        if this.length < sizeof uint, return false
+        *res = ntohl(*cast *uint this.buffer)
+        return true
+    }
+    
+    func writeFrame(bytes uint) {
+        data uint = htonl(bytes)
+        this.writeRaw(&data as *ubyte, sizeof uint)
+    }
+    
+    func advance(count usize) {
+        this.lock()
+        if count > this.length, count = this.length
+        memmove(this.buffer, this.buffer at count, this.length - count)
+        this.length -= count
+        this.unlock()
+    }
+    
+    func lock {
+        pthread_mutex_lock(&this.mutex)
+    }
+    
+    func unlock {
+        pthread_mutex_unlock(&this.mutex)
+    }
+    
+    func getLength() usize {
+        this.lock()
+        defer this.unlock()
+        return this.length
+    }
+}

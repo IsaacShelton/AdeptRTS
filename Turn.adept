@@ -1,0 +1,97 @@
+
+import 'main.adept'
+
+struct TurnQueue (turns 3 Turn, is_server bool) {
+    func create {
+        repeat 3, this.turns[idx].zero()
+        repeat 3 {
+            this.turns[idx].hasServer = true
+            this.turns[idx].hasClient = true
+        }
+        this.is_server = false
+    }
+    
+    func destroy {
+        repeat 3, this.turns[idx].destroy()
+    }
+    
+    func shift {
+        unless this.canShift(), return
+        this.turns[0].destroy()
+        this.turns[0] = this.turns[1]
+        this.turns[1] = this.turns[2]
+        this.turns[2].zero()
+    }
+    
+    func performAndShift {
+        unless this.canShift(), printf('INTERNAL ERROR: Can\'t Turn.performAndShift()\n'); return
+        this.turns[0].perform()
+        this.shift()
+    }
+    
+    func feedInternal(actions Actions) {
+        this.turns[2].feedInternal(this.is_server, actions)
+    }
+    
+    func feedExternal(data *ubyte, length usize) {
+        this.turns[1].feedExternal(this.is_server, data, length)
+    }
+    
+    func printSummary {
+        printf('is_server = %d\n', this.is_server as int)
+        repeat 3, this.turns[idx].print()
+        printf('\n')
+    }
+    
+    func canShift bool = this.turns[1].hasServer && this.turns[1].hasClient && (this.is_server ? this.turns[2].hasServer : this.turns[2].hasClient)
+    func waitingOnNetwork bool = this.is_server ? !this.turns[1].hasClient : !this.turns[1].hasServer
+}
+
+struct Turn (server, client Actions, hasServer, hasClient bool) {
+    func zero {
+        this.server.zero()
+        this.client.zero()
+        this.hasServer = false
+        this.hasClient = false
+    }
+    
+    func destroy {
+        this.server.destroy()
+        this.client.destroy()
+    }
+    
+    func perform {
+        this.server.execute()
+        this.client.execute()
+    }
+    
+    func feedInternal(we_are_server bool, actions Actions) {
+        if we_are_server ? this.hasServer : this.hasClient,
+            printf('INTERNAL ERROR: Turn.feedInternal() called when actions already present for \'%s\'\n', we_are_server ? 'server' : 'client'); return
+        
+        if we_are_server {
+            this.server = actions
+            this.hasServer = true
+        } else {
+            this.client = actions
+            this.hasClient = true
+        }
+    }
+    
+    func feedExternal(we_are_server bool, data *ubyte, length usize) {
+        if we_are_server ? this.hasClient : this.hasServer,
+            printf('INTERNAL ERROR: Turn.feedExternal() called when actions already present for partner \'%s\'\n', we_are_server ? 'client' : 'server'); return
+        
+        if we_are_server {
+            this.client.transferFromNetworkBuffer(data, length)
+            this.hasClient = true
+        } else {
+            this.server.transferFromNetworkBuffer(data, length)
+            this.hasServer = true
+        }
+    }
+    
+    func print {
+        printf('hasServer = %d, hasClient = %d\n', this.hasServer as int, this.hasClient as int)
+    }
+}

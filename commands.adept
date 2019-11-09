@@ -1,0 +1,227 @@
+
+import 'main.adept'
+
+enum CommandKind (BUILD, SELECT, MOVE, MAKE)
+struct Command (command_kind CommandKind) {
+    func getSize usize {
+        switch this.command_kind {
+        case CommandKind::BUILD,  return sizeof BuildCommand
+        case CommandKind::SELECT, return sizeof SelectCommand
+        case CommandKind::MOVE,   return sizeof MoveCommand
+        case CommandKind::MAKE,   return sizeof MakeCommand
+        }
+        return 0
+    }
+    
+    func execute {
+        switch this.command_kind {
+        case CommandKind::BUILD
+            build *BuildCommand = this as *BuildCommand
+            building Building = building(build.kind, build.team)
+            building.x = build.x
+            building.y = build.y
+            gamedata.buildings.add(building)
+            
+            switch build.team {
+            case 1ub, gamedata.blue_placed_once = true
+            case 2ub, gamedata.red_placed_once  = true
+            }
+            
+            return
+        case CommandKind::SELECT
+            select *SelectCommand = this as *SelectCommand
+            selection *<UnitID> List = select.team == gamedata.team ? &gamedata.selection : &gamedata.enemy_selection
+            selection.clear()
+            repeat 256, if getBit(&select.bytes, idx), selection.add(gamedata.units.getPointer(idx).id)
+            return
+        case CommandKind::MOVE
+            move *MoveCommand = this as *MoveCommand
+            moveTo(move.team, move.x, move.y, true)
+            return
+        case CommandKind::MAKE
+            make *MakeCommand = this as *MakeCommand
+            switch make.kind {
+            case UnitKind::RAIDER,   makeRaider(make.team)
+            case UnitKind::MARKSMEN, makeMarksmen(make.team)
+            case UnitKind::GUARDIAN, makeGuardian(make.team)
+            }
+        }
+    }
+    
+    func print {
+        switch this.command_kind {
+        case CommandKind::BUILD
+            printf('Build %s\n', buildKindName((this as *BuildCommand).kind))
+        case CommandKind::SELECT
+            printf('Select\n')
+        case CommandKind::MOVE
+            printf('Move team %d to %f, %f\n', (this as *MoveCommand).team, (this as *MoveCommand).x as double, (this as *MoveCommand).y as double)
+            return
+        case CommandKind::MAKE
+            switch (this as *MakeCommand).kind {
+            case UnitKind::RAIDER,   printf('Make raider\n')
+            case UnitKind::MARKSMEN, printf('Make marksmen\n')
+            case UnitKind::GUARDIAN, printf('Make guardian\n')
+            }
+        }
+    }
+    
+    func hton {
+        #if __little_endian__
+        this.command_kind = hton64(this.command_kind as usize) as CommandKind
+        
+        switch this.command_kind {
+        case CommandKind::BUILD
+            build *BuildCommand = this as *BuildCommand
+            build.kind = hton64(build.kind as usize) as BuildingKind
+            *cast *uint &build.x = htonl(*cast *uint &build.x)
+            *cast *uint &build.y = htonl(*cast *uint &build.y)
+            return
+        case CommandKind::SELECT
+            // Nothing to do
+            return
+        case CommandKind::MOVE
+            move *MoveCommand = this as *MoveCommand
+            *cast *uint &move.x = htonl(*cast *uint &move.x)
+            *cast *uint &move.y = htonl(*cast *uint &move.y)
+            return
+        case CommandKind::MAKE
+            make *MakeCommand = this as *MakeCommand
+            make.kind = hton64(make.kind as usize) as UnitKind
+            return
+        }
+        #end
+    }
+    
+    func ntoh {
+        #if __little_endian__
+        this.hton() // Works because hton and ntoh are symmetrical
+        #end
+    }
+}
+
+packed struct BuildCommand (struct Command, team ubyte, kind BuildingKind, x, y float)
+packed struct SelectCommand (struct Command, team ubyte, bytes 32 ubyte)
+packed struct MoveCommand (struct Command, team ubyte, x, y float)
+packed struct MakeCommand (struct Command, team ubyte, kind UnitKind)
+
+struct Actions (first_command *Command, size, count usize) {
+    func clear {
+        this.destroy()
+        this.zero()
+    }
+    
+    func zero {
+        this.first_command = null
+        this.size = 0
+        this.count = 0
+    }
+    
+    func destroy {
+        delete this.first_command
+    }
+    
+    func addCommand(in command *Command) {
+        command_size usize = command.getSize()
+        this.first_command = realloc(this.first_command, this.size + command_size)
+        memcpy((this.first_command as *ubyte) at this.size, command, command_size)
+        this.size += command_size
+        this.count++
+    }
+    
+    func addBuildCommand(team int, kind BuildingKind, x, y float) {
+        command BuildCommand
+        command.command_kind = CommandKind::BUILD
+        command.team = team
+        command.kind = kind
+        command.x = x
+        command.y = y
+        this.addCommand(&command as *Command)
+    }
+    
+    func addSelectCommand(team int, bytes 32 ubyte) {
+        command SelectCommand
+        command.command_kind = CommandKind::SELECT
+        command.team = team
+        command.bytes = bytes
+        // (rest is auto zeroed)
+        this.addCommand(&command as *Command)
+    }
+    
+    func addMakeCommand(team int, kind UnitKind) {
+        command MakeCommand
+        command.command_kind = CommandKind::MAKE
+        command.team = team
+        command.kind = kind
+        this.addCommand(&command as *Command)
+    }
+    
+    func addMoveCommand(team int, x, y float) {
+        command MoveCommand
+        command.command_kind = CommandKind::MOVE
+        command.team = team
+        command.x = x
+        command.y = y
+        this.addCommand(&command as *Command)
+    }
+    
+    func hton {
+        #if __little_endian__
+        command *Command = this.first_command
+        while command {
+            command.hton()
+            command = this.iterate(command)
+        }
+        #end
+    }
+    
+    func ntoh {
+        #if __little_endian__
+        this.hton() // Works because hton and ntoh are symmetrical
+        #end
+    }
+    
+    func iterate(head *Command) *Command {
+        head = cast *Command (head as *ubyte + head.getSize() as ptr)
+        return head as *ubyte == this.first_command as *ubyte + this.size as ptr ? null as *Command : head
+    }
+    
+    func transferToNetworkStream(stream *NetworkStream) {
+        this.hton()
+        stream.write(this.first_command as *ubyte, this.size)
+    }
+    
+    func transferFromNetworkBuffer(buffer *ubyte, length usize) {
+        this.destroy()
+        this.first_command = buffer as *Command
+        this.size = length
+        this.count = 0
+        this.ntoh()
+    }
+    
+    func print {
+        command *Command = this.first_command
+        while command {
+            command.print()
+            command = this.iterate(command)
+        }
+    }
+    
+    func execute {
+        command *Command = this.first_command
+        while command {
+            command.execute()
+            command = this.iterate(command)
+        }
+    }
+}
+
+func buildKindName(kind BuildingKind) *ubyte {
+    switch kind {
+    case BuildingKind::MINE,    return 'Mine'
+    case BuildingKind::OUTPOST, return 'Outpost'
+    case BuildingKind::RANGE,   return 'Range'
+    case BuildingKind::CLUB,    return 'Club'
+    }
+    return 'Unknown'
+}

@@ -1,0 +1,222 @@
+
+import 'main.adept'
+import 'NetworkStream.adept'
+
+import '2.2/String.adept'
+import '2.2/terminal.adept'
+import 'sys/cerrno.adept'
+import 'posix/pthread.adept'
+
+#if __windows__
+    import 'windows/winsock.adept'
+#else
+    import 'unix/netdb.adept'
+    import 'unix/unistd.adept'
+    import 'unix/arpa/inet.adept'
+    import 'unix/sys/socket.adept'
+    import 'unix/netinet/tcp.adept'
+#end
+
+foreign ioctl(int, ulong, ...) int
+#if __macos__
+    FIOCLEX == 536897025
+    FIONCLEX == 536897026
+    FIONREAD == 1074030207
+    FIONBIO == 2147772030
+    FIOASYNC == 2147772029
+    FIOSETOWN == 2147772028
+    FIOGETOWN == 1074030203
+    FIODTYPE == 1074030202
+#end
+
+PORT == 5678
+
+func startServer {
+    gamedata.creating_game = false
+    gamedata.team = 1
+    pthread_create(&gamedata.networking_thread, null, func &server, null)
+}
+
+func startClient(address String) {
+    gamedata.creating_game = false
+    gamedata.team = 2
+    pthread_create(&gamedata.networking_thread, null, func &client, address.cstr())
+}
+
+func server(data ptr) ptr {
+    startupNetworking()
+    defer cleanupNetworking()
+    
+    server_fd int = socket(AF_INET, SOCK_STREAM, 0)
+    if server_fd < 0,
+        printf('socket() failed\n'); return null
+    
+    defer close(server_fd)
+    
+    server sockaddr_in
+    server.sin_family = AF_INET
+    server.sin_port = htons(PORT)
+    server.sin_addr.s_addr = htonl(INADDR_ANY)
+    
+    flags int = 1
+    if setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof int) < 0,
+        printf('setsockopt(SO_REUSEADDR) failed\n'); return null
+    
+    if bind(server_fd, &server as *sockaddr, sizeof sockaddr_in) < 0 {
+        printf('bind() failed\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to bind port"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    printf('Listening...\n')
+    
+    if listen(server_fd, 16) < 0,
+        printf('listen() failed\n'); return null
+    
+    client_length socklen_t = sizeof sockaddr_in
+    client_fd int = accept(server_fd, undef client sockaddr_in as *sockaddr, &client_length)
+    if client_fd < 0,
+        printf('accept() failed\n'); return null
+    
+    defer printf('Terminating...\n')
+    defer close(client_fd)
+    
+    printf('Connected\n')
+    pthread_mutex_lock(&gamedata.networking_mutex)
+    gamedata.waiting_for_connection = false
+    pthread_mutex_unlock(&gamedata.networking_mutex)
+    
+    transmission(client_fd)
+    return null
+}
+
+func client(strong_host_address ptr) ptr {
+    startupNetworking()
+    defer cleanupNetworking()
+    
+    client_fd int = socket(AF_INET, SOCK_STREAM, 0)
+    if client_fd < 0,
+        printf('socket() failed\n'); return null
+    
+    defer close(client_fd)
+    
+    host *hostent = gethostbyname(strong_host_address)
+    delete strong_host_address
+    
+    if host == null {
+        printf('gethostbyname() failed\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to resolve hostname"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    serveraddr sockaddr_in = undef
+    memset(&serveraddr, 0, sizeof sockaddr_in)
+    serveraddr.sin_family = AF_INET
+    memcpy(host.h_addr_list[0], &serveraddr.sin_addr.s_addr, host.h_length)
+    serveraddr.sin_port = htons(PORT)
+    
+    if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 {
+        printf('connect() failed\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to connect to server"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    defer printf('Terminating...\n')
+    defer close(client_fd)
+    
+    printf('Connected\n')
+    pthread_mutex_lock(&gamedata.networking_mutex)
+    gamedata.waiting_for_connection = false
+    pthread_mutex_unlock(&gamedata.networking_mutex)
+    
+    transmission(client_fd)
+    return null
+}
+
+func transmission(socket int) {
+    flags int = 1
+    if setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &flags, sizeof int) < 0,
+        printf('setsockopt(TCP_NODELAY) failed\n'); return
+    
+    buffer_size usize = 1024
+    buffer *ubyte = new ubyte * buffer_size
+    defer delete buffer
+    
+    istream *NetworkStream = &gamedata.istream
+    ostream *NetworkStream = &gamedata.ostream
+    
+    until break {
+        // Handle transmission
+        
+        // Close thread if requested
+        if networkingThreadShouldClose(), return
+        
+        // Only receive data if data is ready
+        ioctl(socket, FIONREAD, undef bytes_available int)
+        while bytes_available != 0 {
+            // Receive data from network
+            received_length int = recv(socket, buffer, min(bytes_available, buffer_size as int), 0)
+            if received_length < 0, printf('recv() failed\n'); return
+            istream.writeRaw(buffer, received_length)
+            ioctl(socket, FIONREAD, &bytes_available)
+        }
+        
+        // Close thread if requested
+        if networkingThreadShouldClose(), return
+        
+        if ostream.getLength() > 0 {
+            // Read any frames that are ready
+            until break {
+                // Attempt to read the next frame
+                if !ostream.read(undef contents *ubyte, undef contents_length usize), break
+                
+                defer delete contents
+                
+                // Send frame contents
+                frame_header uint = htonl(contents_length as uint)
+                
+                if send(socket, &frame_header, sizeof uint, 0) < 0,
+                    printf('send(frame_header) failed\n'); return
+                
+                if contents_length != 0, if send(socket, contents, contents_length, 0) < 0,
+                    printf('send(contents) failed\n'); return
+            }
+            ostream.clear()
+        }
+    }
+    
+    return
+}
+
+func startupNetworking {
+    errno = 0
+    #if __windows__
+        wsaData WSADATA = undef
+        wsaStartupResult int = WSAStartup(WINSOCK_2_2, &wsaData)
+        
+        if wsaStartupResult != 0 {
+            printf('WSAStartup failed: %d\n', wsaStartupResult)
+            return false
+        }
+    #end
+}
+
+func cleanupNetworking {
+    #if __windows__
+        WSACleanup()
+    #end
+}
+
+func networkingThreadShouldClose bool {
+    pthread_mutex_lock(&gamedata.networking_mutex)
+    should_close bool = gamedata.networking_thread_should_close
+    pthread_mutex_unlock(&gamedata.networking_mutex)
+    if should_close, printf('Closing network thread correctly...\n')
+    return should_close
+}

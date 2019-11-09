@@ -1,0 +1,1039 @@
+
+#set fast_build_times false
+#set multiple_raiders false
+#set multiple_marksmen false
+#set multiple_guardians false
+#set fullscreen true
+
+import '2.2/List.adept'
+import '2.2/captain.adept'
+
+import 'posix/pthread.adept'
+
+import 'Text.adept'
+import 'Turn.adept'
+import 'NetworkStream.adept'
+import 'commands.adept'
+import 'networking.adept'
+import 'where.adept'
+
+struct Textures (
+    swamp,
+    mine, mine_blue, mine_red,
+    outpost, outpost_blue, outpost_red,
+    range, range_blue, range_red,
+    club, club_blue, club_red,
+    emptyIcon,
+    workerIcon,
+    scoutIcon,
+    mineIcon,
+    outpostIcon,
+    rangeIcon,
+    clubIcon,
+    raiderIcon,
+    marksmenIcon,
+    guardianIcon,
+    select,
+    health,
+    progress,
+    scout,
+    raider, raider_blue, raider_red, raider_attack, raider_attack_blue, raider_attack_red,
+    marksmen, marksmen_blue, marksmen_red, marksmen_attack, marksmen_attack_blue, marksmen_attack_red,
+    guardian, guardian_blue, guardian_red, guardian_attack, guardian_attack_blue, guardian_attack_red,
+    font CaptTexture
+)
+
+struct GameData (
+    cameraX, cameraY, cameraSpeed float,
+    buildings <Building> List,
+    units <Unit> List,
+    selection <UnitID> List,
+    enemy_selection <UnitID> List,
+    placing Building,
+    is_placing bool,
+    selectStartX, selectStartY float,
+    is_selecting bool,
+    money int,
+    next_id UnitID,
+    groups <<UnitID> List> List,
+    team int,
+    minX, minY, maxX, maxY float,
+    text Text, text_timer int,
+    resources_text Text,
+    tick_id_text Text,
+    show_tick_id bool,
+    tick_id usize,
+    actions Actions,
+    turn_queue TurnQueue,
+    artificial_wait bool,
+    
+    // Creating Game
+    creating_game bool,
+    is_server bool,
+    input_text String,
+    creating_game_text Text,
+    waiting_for_address bool,
+    blue_placed_once, red_placed_once bool,
+    winner int,
+    winner_text Text,
+    
+    networking_thread pthread_t,
+    networking_mutex pthread_mutex_t,
+    waiting_for_connection bool,
+    networking_thread_should_close bool,
+    networking_error String,
+    networking_error_when double,
+    istream, ostream NetworkStream
+)
+
+alias UnitID = usize
+enum BuildingKind (MINE, OUTPOST, RANGE, CLUB)
+enum UnitKind (SCOUT, RAIDER, MARKSMEN, GUARDIAN)
+
+struct Building (kind BuildingKind, texture CaptTexture, x, y, w, h float, health, max_health, team int, progress float)
+func building(kind BuildingKind, team int) Building {
+    building POD Building = undef
+    building.kind = kind
+    
+    switch kind {
+    case BuildingKind::MINE
+        building.texture = team == 1 ? textures.mine_blue : textures.mine_red
+        building.health = 100
+        building.w = 24.0f * 2.0f
+        building.h = 12.0f * 2.0f
+    case BuildingKind::OUTPOST
+        building.texture = team == 1 ? textures.outpost_blue : textures.outpost_red
+        building.health = 100
+        building.w = 30.0f * 2.0f
+        building.h = 38.0f * 2.0f
+    case BuildingKind::RANGE
+        building.texture = team == 1 ? textures.range_blue : textures.range_red
+        building.health = 100
+        building.w = 40.0f * 2.0f
+        building.h = 14.0f * 2.0f
+    case BuildingKind::CLUB
+        building.texture = team == 1 ? textures.club_blue : textures.club_red
+        building.health = 100
+        building.w = 36.0f * 2.0f
+        building.h = 18.0f * 2.0f
+    default
+        building.texture = textures.mine
+        building.health = 100
+        building.w = 24.0f * 2.0f
+        building.h = 12.0f * 2.0f
+    }
+    
+    building.x = 0.0f
+    building.y = 0.0f
+    building.max_health = building.health
+    building.team = team
+    building.progress = 0.0f
+    return building
+}
+
+struct Unit (
+    id usize,
+    kind UnitKind,
+    texture CaptTexture,
+    x, y, w, h, speed, targetX, targetY float,
+    health, max_health, team int,
+    moving, force_move bool,
+    
+    attack_texture CaptTexture,
+    attack_x_offset, attack_y_offset, attack_w, attack_h float,
+    attack_cooldown, attack_max_cooldown usize,
+    attack_active, attack_max_active usize,
+    attack_damage int
+) {
+    func moveTo(xWorld, yWorld float, force_move bool) {
+        this.targetX = xWorld
+        this.targetY = yWorld
+        this.moving = true
+        this.force_move = force_move
+    }
+    
+    func tickAnimation {
+        if this.attack_active {
+            if --this.attack_active == 0 {
+                this.attack_cooldown = this.attack_max_cooldown
+            }
+        } else {
+            if this.attack_cooldown > 0, this.attack_cooldown--
+        }
+    }
+    
+    func attemptAttack successful {
+        if this.attack_active == 0 && this.attack_cooldown == 0, this.attack_active = this.attack_max_active; return true
+        return false
+    }
+    
+    func draw {
+        if this.attack_active == 0 {
+            drawTexture(this.texture, this.x - gamedata.cameraX, this.y - gamedata.cameraY, this.w, this.h, this.health as float / this.max_health as float, 0.0f)
+        } else {
+            drawTexture(this.attack_texture, this.x - gamedata.cameraX + this.attack_x_offset, this.y - gamedata.cameraY + this.attack_y_offset,
+                this.attack_w, this.attack_h, this.health as float / this.max_health as float, 0.0f)
+        }
+    }
+}
+
+func unit(kind UnitKind, x, y float, team int) Unit {
+    unit POD Unit = undef
+    unit.id = nextId()
+    unit.kind = kind
+    
+    switch kind {
+    case UnitKind::RAIDER
+        unit.texture = team == 1 ? textures.raider_blue : textures.raider_red
+        unit.w = 10.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 4.0f
+        unit.health = 15
+        
+        unit.attack_texture = team == 1 ? textures.raider_attack_blue : textures.raider_attack_red
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = 11.0f * 2.0f
+        unit.attack_h = 11.0f * 2.0f
+        unit.attack_max_cooldown = 30
+        unit.attack_max_active = 5
+        unit.attack_damage = 5
+    case UnitKind::MARKSMEN
+        unit.texture = team == 1 ? textures.marksmen_blue : textures.marksmen_red
+        unit.w = 8.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 3.0f
+        unit.health = 10
+        
+        unit.attack_texture = team == 1 ? textures.marksmen_attack_blue : textures.marksmen_attack_red
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = 7.0f * 2.0f
+        unit.attack_h = 11.0f * 2.0f
+        unit.attack_max_cooldown = 120
+        unit.attack_max_active = 5
+        unit.attack_damage = 20
+    case UnitKind::GUARDIAN
+        unit.texture = team == 1 ? textures.guardian_blue : textures.guardian_red
+        unit.w = 10.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 2.0f
+        unit.health = 20
+        
+        unit.attack_texture = team == 1 ? textures.guardian_attack_blue : textures.guardian_attack_red
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = 14.0f * 2.0f
+        unit.attack_h = 12.0f * 2.0f
+        unit.attack_max_cooldown = 60
+        unit.attack_max_active = 5
+        unit.attack_damage = 15
+    default
+        unit.texture = textures.raider
+        unit.w = 10.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 4.0f
+        unit.health = 15
+        
+        unit.attack_texture = unit.texture
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = unit.w
+        unit.attack_h = unit.h
+        unit.attack_max_cooldown = 30
+        unit.attack_max_active = 5
+        unit.attack_damage = 5
+    }
+    
+    unit.x = x
+    unit.y = y
+    unit.targetX = x
+    unit.targetY = y
+    unit.max_health = unit.health
+    unit.team = team
+    unit.moving = false
+    unit.attack_cooldown = 0
+    unit.attack_active = 0
+    return unit
+}
+
+textures Textures
+gamedata GameData
+
+func main {
+    captOnSetup(func &onSetup)
+    captOnStep(func &onStep, 60)
+    captOnClick(func &onClick, true)
+    captOnRelease(func &onRelease, true)
+    captOnKey(func &onKey)
+    captOnChar(func &onChar)
+    captOnDraw(func &onDraw)
+    captOnExit(func &onExit)
+    
+    #if fullscreen
+        captStart('Outpost', true)
+    #else
+        captStart('Outpost', 1920 / 2, 1080 / 2, false)
+    #end
+}
+
+func onSetup {
+    assetsFolder String = where() + "assets/"
+    captCustomViewBasedOnHeight(480.0f)
+    textures.swamp = captTexture(assetsFolder + "swamp.png", false)
+    textures.mine = captTexture(assetsFolder + "mine.png", false)
+    textures.mine_blue = captTexture(assetsFolder + "mine_blue.png", false)
+    textures.mine_red = captTexture(assetsFolder + "mine_red.png", false)
+    textures.outpost = captTexture(assetsFolder + "outpost.png", false)
+    textures.outpost_blue = captTexture(assetsFolder + "outpost_blue.png", false)
+    textures.outpost_red = captTexture(assetsFolder + "outpost_red.png", false)
+    textures.range = captTexture(assetsFolder + "range.png", false)
+    textures.range_blue = captTexture(assetsFolder + "range_blue.png", false)
+    textures.range_red = captTexture(assetsFolder + "range_red.png", false)
+    textures.club = captTexture(assetsFolder + "club.png", false)
+    textures.club_blue = captTexture(assetsFolder + "club_blue.png", false)
+    textures.club_red = captTexture(assetsFolder + "club_red.png", false)
+    textures.emptyIcon = captTexture(assetsFolder + "empty_icon.png", false)
+    textures.workerIcon = captTexture(assetsFolder + "worker_icon.png", false)
+    textures.scoutIcon = captTexture(assetsFolder + "scout_icon.png", false)
+    textures.mineIcon = captTexture(assetsFolder + "mine_icon.png", false)
+    textures.outpostIcon = captTexture(assetsFolder + "outpost_icon.png", false)
+    textures.rangeIcon = captTexture(assetsFolder + "range_icon.png", false)
+    textures.clubIcon = captTexture(assetsFolder + "club_icon.png", false)
+    textures.raiderIcon = captTexture(assetsFolder + "raider_icon.png", false)
+    textures.marksmenIcon = captTexture(assetsFolder + "marksmen_icon.png", false)
+    textures.guardianIcon = captTexture(assetsFolder + "guardian_icon.png", false)
+    textures.select = captTexture(assetsFolder + "select.png", false)
+    textures.health = captTexture(assetsFolder + "health.png", false)
+    textures.progress = captTexture(assetsFolder + "progress.png", false)
+    textures.scout = captTexture(assetsFolder + "scout.png", false)
+    textures.raider = captTexture(assetsFolder + "raider.png", false)
+    textures.raider_blue = captTexture(assetsFolder + "raider_blue.png", false)
+    textures.raider_red = captTexture(assetsFolder + "raider_red.png", false)
+    textures.raider_attack = captTexture(assetsFolder + "raider_attack.png", false)
+    textures.raider_attack_blue = captTexture(assetsFolder + "raider_attack_blue.png", false)
+    textures.raider_attack_red = captTexture(assetsFolder + "raider_attack_red.png", false)
+    textures.marksmen = captTexture(assetsFolder + "marksmen.png", false)
+    textures.marksmen_blue = captTexture(assetsFolder + "marksmen_blue.png", false)
+    textures.marksmen_red = captTexture(assetsFolder + "marksmen_red.png", false)
+    textures.marksmen_attack = captTexture(assetsFolder + "marksmen_attack.png", false)
+    textures.marksmen_attack_blue = captTexture(assetsFolder + "marksmen_attack_blue.png", false)
+    textures.marksmen_attack_red = captTexture(assetsFolder + "marksmen_attack_red.png", false)
+    textures.guardian = captTexture(assetsFolder + "guardian.png", false)
+    textures.guardian_blue = captTexture(assetsFolder + "guardian_blue.png", false)
+    textures.guardian_red = captTexture(assetsFolder + "guardian_red.png", false)
+    textures.guardian_attack = captTexture(assetsFolder + "guardian_attack.png", false)
+    textures.guardian_attack_blue = captTexture(assetsFolder + "guardian_attack_blue.png", false)
+    textures.guardian_attack_red = captTexture(assetsFolder + "guardian_attack_red.png", false)
+    textures.font = captTexture(assetsFolder + "font.png", false)
+    
+    gamedata.text = text("", 14.0f)
+    gamedata.resources_text = text("", 14.0f)
+    gamedata.tick_id_text = text("", 14.0f)
+    gamedata.winner_text = text("", 20.0f)
+    
+    createNewGame()
+    pthread_mutex_init(&gamedata.networking_mutex, null)
+    gamedata.istream.create()
+    gamedata.ostream.create()
+}
+
+func setupGameState {
+    gamedata.cameraX = 0.0f
+    gamedata.cameraY = 0.0f
+    gamedata.cameraSpeed = 4.0f
+    gamedata.buildings.clear()
+    gamedata.units.clear()
+    gamedata.selection.clear()
+    gamedata.enemy_selection.clear()
+    gamedata.is_placing = false
+    gamedata.is_selecting = false
+    gamedata.money = 30
+    gamedata.next_id = 0
+    gamedata.groups.clear()
+    emptyGroup <UnitID> List
+    repeat 9, gamedata.groups.add(emptyGroup)
+    gamedata.team = 1
+    gamedata.minX = -960.0f
+    gamedata.maxX = 960.0f
+    gamedata.minY = -960.0f
+    gamedata.maxY = 960.0f
+    gamedata.text = text("", 14.0f)
+    gamedata.text_timer = 0
+    gamedata.resources_text.destroy()
+    gamedata.resources_text = text("Resources: 0", 14.0f)
+    gamedata.tick_id_text.destroy()
+    gamedata.tick_id_text = text("Tick ID: N/A", 14.0f)
+    gamedata.show_tick_id = false
+    gamedata.tick_id = 0
+    gamedata.actions.clear()
+    gamedata.turn_queue.create()
+    gamedata.artificial_wait = false
+}
+
+func createNewGame() {
+    gamedata.istream.clear()
+    gamedata.ostream.clear()
+    
+    gamedata.turn_queue.is_server = false
+    gamedata.turn_queue.destroy()
+    gamedata.turn_queue.create()
+    
+    gamedata.creating_game = true
+    gamedata.is_server = false
+    gamedata.input_text = ""
+    gamedata.creating_game_text.destroy()
+    gamedata.creating_game_text = text("", 14.0f)
+    gamedata.waiting_for_address = false
+    gamedata.blue_placed_once = false
+    gamedata.red_placed_once = false
+    gamedata.winner = 0
+    gamedata.winner_text.destroy()
+    gamedata.winner_text = text("", 20.0f)
+    
+    gamedata.waiting_for_connection = true
+    gamedata.networking_thread_should_close = false
+    gamedata.networking_error = ""
+    gamedata.networking_error_when = 0.0
+    gamedata.istream.clear()
+    gamedata.ostream.clear()
+    
+    setupGameState()
+}
+
+func onExit {
+    gamedata.actions.destroy()
+    gamedata.turn_queue.destroy()
+    
+    pthread_mutex_lock(&gamedata.networking_mutex)
+    gamedata.networking_thread_should_close = true
+    pthread_mutex_unlock(&gamedata.networking_mutex)
+    pthread_join(gamedata.networking_thread, null)
+    
+    gamedata.resources_text.destroy()
+    gamedata.tick_id_text.destroy()
+    gamedata.text.destroy()
+    pthread_mutex_destroy(&gamedata.networking_mutex)
+    gamedata.istream.destroy()
+    gamedata.ostream.destroy()
+    gamedata.winner_text.destroy()
+}
+
+func placingMine(team int) {
+    gamedata.placing = building(BuildingKind::MINE, team)
+    gamedata.is_placing = true
+}
+
+func placingOutpost(team int) {
+    gamedata.placing = building(BuildingKind::OUTPOST, team)
+    gamedata.is_placing = true
+}
+
+func placingRange(team int) {
+    gamedata.placing = building(BuildingKind::RANGE, team)
+    gamedata.is_placing = true
+}
+
+func placingClub(team int) {
+    gamedata.placing = building(BuildingKind::CLUB, team)
+    gamedata.is_placing = true
+}
+
+func notEnoughMoney(required int) bool {
+    if required > gamedata.money {
+        gamedata.text.destroy()
+        gamedata.text = text("Not enough money, % required" % required, 14.0f);
+        gamedata.text_timer = 60
+        return true
+    }
+    gamedata.money -= required
+    return false
+}
+
+func makeRaider(team int) {
+    outpost *Building = findIdleBuilding(team, BuildingKind::OUTPOST)
+    unless outpost, return
+    
+    #if fast_build_times
+    outpost.progress = 0.9f
+    #else
+    outpost.progress = 0.002f
+    #end
+}
+
+func makeMarksmen(team int) {
+    range *Building = findIdleBuilding(team, BuildingKind::RANGE)
+    unless range, return
+    
+    #if fast_build_times
+    range.progress = 0.9f
+    #else
+    range.progress = 0.0015f
+    #end
+}
+
+func makeGuardian(team int) {
+    club *Building = findIdleBuilding(team, BuildingKind::CLUB)
+    unless club, return
+    
+    #if fast_build_times
+    club.progress = 0.9f
+    #else
+    club.progress = 0.001f
+    #end
+}
+
+func findIdleBuilding(team int, kind BuildingKind) *Building {
+    each Building in gamedata.buildings {
+        if it.team != team, continue
+        if it.kind != kind || it.progress != 0.0f, continue
+        return &it
+    }
+    return null
+}
+
+func raiderUnit(x, y float, team int) {
+    gamedata.units.add(unit(UnitKind::RAIDER, x, y, team))
+}
+
+func marksmenUnit(x, y float, team int) {
+    gamedata.units.add(unit(UnitKind::MARKSMEN, x, y, team))
+}
+
+func guardianUnit(x, y float, team int) {
+    gamedata.units.add(unit(UnitKind::GUARDIAN, x, y, team))
+}
+
+func onStep {
+    if gamedata.creating_game {
+        gamedata.creating_game_text.destroy()
+        
+        if gamedata.waiting_for_address,
+            gamedata.creating_game_text = text("Enter Server Address: %" % gamedata.input_text, 14.0f)
+        else
+            gamedata.creating_game_text = text("server or client: %" % gamedata.input_text, 14.0f)
+        
+        return
+    } else {
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        defer pthread_mutex_unlock(&gamedata.networking_mutex)
+        
+        if gamedata.networking_error.length != 0 {
+            gamedata.creating_game_text.destroy()
+            gamedata.creating_game_text = text(gamedata.networking_error, 14.0f)
+            
+            if gamedata.networking_error_when == 0.0, gamedata.networking_error_when = glfwGetTime()
+            else if glfwGetTime() > gamedata.networking_error_when + 1.0, createNewGame()
+            return
+        } else if gamedata.waiting_for_connection {
+            gamedata.creating_game_text.destroy()
+            gamedata.creating_game_text = text("waiting for connection", 14.0f)
+            return
+        }
+    }
+    
+    gamedata.resources_text.destroy()
+    gamedata.resources_text = text("Resources: %" % gamedata.money, 14.0f)
+    if gamedata.text_timer > 0, gamedata.text_timer--
+    
+    modifier float = captKeyHeld(GLFW_KEY_LEFT_SHIFT) ? 4.0f : 1.0f
+    if captKeyHeld(GLFW_KEY_W), gamedata.cameraY -= gamedata.cameraSpeed * modifier
+    if captKeyHeld(GLFW_KEY_S), gamedata.cameraY += gamedata.cameraSpeed * modifier
+    if captKeyHeld(GLFW_KEY_A), gamedata.cameraX -= gamedata.cameraSpeed * modifier
+    if captKeyHeld(GLFW_KEY_D), gamedata.cameraX += gamedata.cameraSpeed * modifier
+    
+    if gamedata.cameraX < gamedata.minX, gamedata.cameraX = gamedata.minX
+    if gamedata.cameraY < gamedata.minY, gamedata.cameraY = gamedata.minY
+    if gamedata.cameraX + captViewWidth() > gamedata.maxX, gamedata.cameraX = gamedata.maxX - captViewWidth()
+    if gamedata.cameraY + captViewHeight() > gamedata.maxY, gamedata.cameraY = gamedata.maxY - captViewHeight()
+    
+    if gamedata.show_tick_id {
+        gamedata.tick_id_text.destroy()
+        gamedata.tick_id_text = text("Tick ID: % Artificial Wait: %" % gamedata.tick_id as int % (gamedata.artificial_wait ? "true" : "false"), 14.0f)
+    }
+    
+    // Read from input network stream
+    if gamedata.turn_queue.waitingOnNetwork() {
+        if gamedata.istream.read(undef contents *ubyte, undef contents_length usize) {
+            // Ownership of 'contents' is given away
+            gamedata.turn_queue.feedExternal(contents, contents_length)
+        }
+    }
+    
+    if gamedata.tick_id % 5 == 0 {
+        if gamedata.turn_queue.waitingOnNetwork() || gamedata.artificial_wait {
+            gamedata.text.destroy()
+            gamedata.text = text("Waiting on network", 14.0f);
+            gamedata.text_timer = 60
+            return // Don't advance until we're not waiting on the network
+        }
+        
+        gamedata.turn_queue.performAndShift()
+        
+        // Somebody won, nothing to do
+        if gamedata.winner != 0, gamedata.actions.clear()
+        
+        // The local user can't do anything the first turn
+        gamedata.actions.transferToNetworkStream(&gamedata.ostream)
+        gamedata.actions.ntoh() // Hack
+        
+        gamedata.turn_queue.feedInternal(gamedata.actions)
+        
+        gamedata.actions.first_command = null
+        gamedata.actions.size = 0
+        gamedata.actions.count = 0
+    }
+    
+    tick()
+}
+
+func tick {
+    if gamedata.winner != 0, return
+    
+    each Building in gamedata.buildings {
+        switch it.kind {
+        case BuildingKind::MINE
+            it.progress += 0.01f
+            
+            if it.progress >= 1.0f {
+                it.progress = 0.0f
+                if it.team == gamedata.team, gamedata.money++
+            }
+        case BuildingKind::OUTPOST
+            if it.progress > 0.0f, it.progress += 0.002f
+            
+            if it.progress >= 1.0f {
+                if gamedata.units.length >= 256 {
+                    it.progress = 1.0f
+                    gamedata.text.destroy()
+                    gamedata.text = text("Too many units", 14.0f);
+                    gamedata.text_timer = 60
+                } else {
+                    raiderUnit(it.x + it.w/2 - 10.0f, it.y + it.h, it.team)
+                    #if multiple_raiders
+                    raiderUnit(it.x + it.w/2 - 10.0f, it.y + it.h + 1.0f, it.team)
+                    raiderUnit(it.x + it.w/2 - 10.0f + 1.0f, it.y + it.h, it.team)
+                    raiderUnit(it.x + it.w/2 - 10.0f + 1.0f, it.y + it.h + 1.0f, it.team)
+                    raiderUnit(it.x + it.w/2 - 10.0f - 1.0f, it.y + it.h - 1.0f, it.team)
+                    #end
+                    it.progress = 0.0f
+                }
+            }
+        case BuildingKind::RANGE
+            if it.progress > 0.0f, it.progress += 0.0015f
+            
+            if it.progress >= 1.0f {
+                if gamedata.units.length >= 256 {
+                    it.progress = 1.0f
+                    gamedata.text.destroy()
+                    gamedata.text = text("Too many units", 14.0f);
+                    gamedata.text_timer = 60
+                } else {
+                    marksmenUnit(it.x + it.w/2 - 10.0f, it.y + it.h, it.team)
+                    #if multiple_marksmen
+                    marksmenUnit(it.x + it.w/2 - 10.0f, it.y + it.h + 1.0f, it.team)
+                    marksmenUnit(it.x + it.w/2 - 10.0f + 1.0f, it.y + it.h, it.team)
+                    marksmenUnit(it.x + it.w/2 - 10.0f + 1.0f, it.y + it.h + 1.0f, it.team)
+                    marksmenUnit(it.x + it.w/2 - 10.0f - 1.0f, it.y + it.h - 1.0f, it.team)
+                    #end
+                    it.progress = 0.0f
+                }
+            }
+        case BuildingKind::CLUB
+            if it.progress > 0.0f, it.progress += 0.001f
+            
+            if it.progress >= 1.0f {
+                if gamedata.units.length > 256 {
+                    it.progress = 1.0f
+                    gamedata.text.destroy()
+                    gamedata.text = text("Too many units", 14.0f);
+                    gamedata.text_timer = 60
+                } else {
+                    guardianUnit(it.x + it.w/2 - 10.0f, it.y + it.h, it.team)
+                    #if multiple_guardians
+                    guardianUnit(it.x + it.w/2 - 10.0f, it.y + it.h + 1.0f, it.team)
+                    guardianUnit(it.x + it.w/2 - 10.0f + 1.0f, it.y + it.h, it.team)
+                    guardianUnit(it.x + it.w/2 - 10.0f + 1.0f, it.y + it.h + 1.0f, it.team)
+                    guardianUnit(it.x + it.w/2 - 10.0f - 1.0f, it.y + it.h - 1.0f, it.team)
+                    #end
+                    it.progress = 0.0f
+                }
+            }
+        }
+    }
+    
+    // Spread out units
+    each Unit in gamedata.units {
+        if it.moving {
+            // Move moving unit and don't spread it
+            angle float = atan2(it.y + it.h / 2.0f - it.targetY, it.x + it.w / 2.0f - it.targetX)
+            it.x -= it.speed * cos(angle)
+            it.y -= it.speed * sin(angle)
+            
+            xdiff float = it.x + it.w / 2.0f - it.targetX
+            ydiff float = it.y + it.h / 2.0f - it.targetY
+            it.moving = sqrt(xdiff * xdiff + ydiff * ydiff) > it.speed
+        } else {
+            it.force_move = false
+        }
+        
+        closeby <Unit> List
+        unit_index usize = idx
+        should_attack bool = false
+        victim *Unit = null
+        victim_building *Building = null
+        
+        repeat gamedata.units.length {
+            if idx == unit_index, continue
+            other *Unit = gamedata.units.getPointer(idx)
+            
+            xdiff float = it.x + it.w / 2.0f - other.x - other.w / 2.0f
+            ydiff float = it.y + it.h / 2.0f - other.y - other.h / 2.0f
+            distance float = sqrtf(xdiff * xdiff + ydiff * ydiff)
+            
+            if distance < (it.kind == UnitKind::MARKSMEN ? 128.0f : 32.0f) {
+                if !should_attack && other.team != it.team {
+                    should_attack = true
+                    victim = other
+                    
+                    if !it.force_move && !other.force_move && distance > 24.0f && it.kind != UnitKind::MARKSMEN,
+                        it.moveTo(other.x + other.w / 2.0f, other.y + other.h / 2.0f, false)
+                }
+            } else continue
+            
+            if distance < 16.0f {
+                closeby.add(gamedata.units.items[idx])
+            }
+        }
+        
+        if !should_attack {
+            each building Building in gamedata.buildings, if building.team != it.team {
+                xdiff float = it.x + it.w / 2.0f - building.x - building.w / 2.0f
+                ydiff float = it.y + it.h / 2.0f - building.y - building.h
+                distance float = sqrtf(xdiff * xdiff + ydiff * ydiff)
+                if distance <= building.w / 2.0f + (it.kind == UnitKind::MARKSMEN ? 128.0f : 8.0f) {
+                    victim_building = &building
+                    should_attack = true
+                    break
+                }
+            }
+        }
+        
+        unless closeby.length == 0 {
+            avg_x, avg_y float
+            each Unit in closeby, avg_x += it.x + it.w / 2.0f; avg_y += it.y + it.h / 2.0f
+            avg_x /= closeby.length as float
+            avg_y /= closeby.length as float
+            
+            angle float = atan2(avg_y - it.y - it.h / 2.0f, avg_x - it.x - it.w / 2.0f) + PI
+            it.x += cos(angle)
+            it.y += sin(angle)
+        }
+        
+        if it.x < gamedata.minX, it.x = gamedata.minX
+        if it.y < gamedata.minY, it.y = gamedata.minY
+        if it.x + it.w > gamedata.maxX, it.x = gamedata.maxX - it.w
+        if it.y + it.h > gamedata.maxY, it.y = gamedata.maxY - it.h
+        
+        it.tickAnimation()
+        
+        if should_attack && it.attemptAttack() {
+            if victim, victim.health -= it.attack_damage
+            else if victim_building, victim_building.health -= it.attack_damage
+        }
+    }
+    
+    each Unit in gamedata.units {
+        if it.health <= 0, gamedata.units.remove(idx--)
+    }
+    
+    each Building in gamedata.buildings {
+        if it.health <= 0, gamedata.buildings.remove(idx--)
+    }
+    
+    if gamedata.blue_placed_once {
+        blue_lost bool = true
+        each Building in gamedata.buildings, if it.team == 1, blue_lost = false; break
+        
+        if gamedata.winner == 0 && blue_lost {
+            gamedata.winner = 2
+            gamedata.winner_text.destroy()
+            gamedata.winner_text = text("red wins", 20.0f)
+        }
+    }
+    
+    if gamedata.red_placed_once {
+        red_lost bool = true
+        each Building in gamedata.buildings, if it.team == 2, red_lost = false; break
+        
+        if gamedata.winner == 0 && red_lost {
+            gamedata.winner = 1
+            gamedata.winner_text.destroy()
+            gamedata.winner_text = text("blue wins", 20.0f)
+        }
+    }
+    
+    gamedata.tick_id++
+}
+
+func onClick(mouseX, mouseY float, button int) {
+    // Somebody won, nothing to do
+    if gamedata.winner != 0, return
+    
+    if button == 1 {
+        if gamedata.is_placing {
+            gamedata.placing.x = mouseX - gamedata.placing.w / 2.0f + gamedata.cameraX
+            gamedata.placing.y = mouseY - gamedata.placing.h / 2.0f + gamedata.cameraY
+            
+            if gamedata.placing.x < gamedata.minX, return
+            if gamedata.placing.y < gamedata.minY, return
+            if gamedata.placing.x + gamedata.placing.w > gamedata.maxX, return
+            if gamedata.placing.y + gamedata.placing.h > gamedata.maxY, return
+            
+            switch gamedata.placing.kind {
+            case BuildingKind::MINE,    if notEnoughMoney(10), return
+            case BuildingKind::OUTPOST, if notEnoughMoney(10), return
+            case BuildingKind::RANGE,   if notEnoughMoney(10), return
+            case BuildingKind::CLUB,    if notEnoughMoney(10), return
+            }
+            
+            
+            gamedata.actions.addBuildCommand(gamedata.team, gamedata.placing.kind, gamedata.placing.x, gamedata.placing.y)
+            gamedata.is_placing = false
+            return
+        }
+        
+        gamedata.selectStartX = mouseX
+        gamedata.selectStartY = mouseY
+        gamedata.is_selecting = true
+    } else if button == 2 {
+        if gamedata.is_placing {
+            gamedata.is_placing = false
+            return
+        }
+        
+        gamedata.actions.addMoveCommand(gamedata.team, mouseX + gamedata.cameraX, mouseY + gamedata.cameraY)
+    }
+}
+
+func onRelease(mouseX, mouseY float, button int) {
+    if button == 1 && gamedata.is_selecting {
+        // Somebody won, nothing to do
+        if gamedata.winner != 0, return
+        
+        gamedata.is_selecting = false
+        select(gamedata.selectStartX, gamedata.selectStartY, mouseX, mouseY)
+    }
+}
+
+func nextId usize = gamedata.next_id++
+func select(x1, y1, x2, y2 float) {
+    buffer 32 ubyte
+    
+    tmp float = undef
+    if x2 < x1, tmp = x1; x1 = x2; x2 = tmp
+    if y2 < y1, tmp = y1; y1 = y2; y2 = tmp
+    
+    each Unit in gamedata.units {
+        if it.team != gamedata.team, continue
+        cx float = it.x + it.w / 2.0f - gamedata.cameraX
+        cy float = it.y + it.h / 2.0f - gamedata.cameraY
+        
+        if cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2,
+            setBit(&buffer, idx)
+    }
+    
+    gamedata.actions.addSelectCommand(gamedata.team, buffer)
+}
+
+func setBit(buffer *32 ubyte, bit usize) {
+    byte_idx usize = bit / 8
+    bit_idx usize = bit % 8
+    
+    mask ubyte = 1 << bit_idx
+    (*buffer)[byte_idx] = (*buffer)[byte_idx] | mask
+}
+
+func getBit(buffer *32 ubyte, bit usize) bool {
+    byte_idx usize = bit / 8
+    bit_idx usize = bit % 8
+    mask ubyte = 1 << bit_idx
+    return ((*buffer)[byte_idx] & mask) != 0
+}
+
+func moveTo(team int, xWorld, yWorld float, force_move bool) {
+    selection *<UnitID> List = team == gamedata.team ? &gamedata.selection : &gamedata.enemy_selection
+    
+    each id UnitID in *selection {
+        each Unit in gamedata.units {
+            if it.id == id, it.moveTo(xWorld, yWorld, force_move); break
+        }
+    }
+}
+
+func onKey(key, scancode, action, mods int) {
+    if action == GLFW_PRESS {
+        if gamedata.creating_game {
+            if key == GLFW_KEY_BACKSPACE, gamedata.input_text.reduce(1)
+            
+            if key == GLFW_KEY_ENTER {
+                if gamedata.waiting_for_address {
+                    gamedata.is_server = false
+                    gamedata.turn_queue.is_server = gamedata.is_server
+                    startClient(gamedata.input_text)
+                } else {
+                    gamedata.is_server = gamedata.input_text == "server"
+                    gamedata.turn_queue.is_server = gamedata.is_server
+                    
+                    if gamedata.is_server, startServer()
+                    else gamedata.waiting_for_address = true
+                }
+                
+                gamedata.input_text.length = 0
+            }
+            return
+        }
+        
+        // Somebody won, nothing to do
+        if gamedata.winner != 0, return
+        
+        switch key {
+        case GLFW_KEY_M, placingMine(gamedata.team)
+        case GLFW_KEY_O, placingOutpost(gamedata.team)
+        case GLFW_KEY_R, placingRange(gamedata.team)
+        case GLFW_KEY_C, placingClub(gamedata.team)
+        case GLFW_KEY_Z,
+            if findIdleBuilding(gamedata.team, BuildingKind::OUTPOST) && notEnoughMoney(5), return
+            gamedata.actions.addMakeCommand(gamedata.team, UnitKind::RAIDER)
+        case GLFW_KEY_X,
+            if findIdleBuilding(gamedata.team, BuildingKind::RANGE) && notEnoughMoney(6), return
+            gamedata.actions.addMakeCommand(gamedata.team, UnitKind::MARKSMEN)
+        case GLFW_KEY_F,
+            if findIdleBuilding(gamedata.team, BuildingKind::CLUB) && notEnoughMoney(7), return
+            gamedata.actions.addMakeCommand(gamedata.team, UnitKind::GUARDIAN)
+        case GLFW_KEY_ESCAPE, gamedata.is_placing = false
+        
+        case GLFW_KEY_TAB, gamedata.team = gamedata.team == 1 ? 2 : 1
+        case GLFW_KEY_BACKSLASH, gamedata.artificial_wait = !gamedata.artificial_wait
+        case GLFW_KEY_ENTER, gamedata.show_tick_id = !gamedata.show_tick_id
+        }
+        
+        repeat 9, if key == GLFW_KEY_1 + idx {
+            key_idx usize = idx
+            
+            if mods & GLFW_MOD_CONTROL {
+                gamedata.groups.getPointer(idx).clear()
+                each UnitID in gamedata.selection, gamedata.groups.getPointer(key_idx).add(it)
+            } else {
+                gamedata.selection.clear()
+                each UnitID in *gamedata.groups.getPointer(key_idx), gamedata.selection.add(it)
+            }
+        }
+    }
+}
+
+func onChar(codepoint uint) {
+    if gamedata.creating_game {
+        gamedata.input_text = gamedata.input_text + codepoint as ubyte
+    } else if gamedata.winner != 0 {
+        if codepoint as ubyte == ' 'ub {
+            pthread_mutex_lock(&gamedata.networking_mutex)
+            gamedata.networking_thread_should_close = true
+            pthread_mutex_unlock(&gamedata.networking_mutex)
+            pthread_join(gamedata.networking_thread, null)
+            createNewGame()
+        }
+        return
+    }
+}
+
+func onDraw {
+    captClearColor(captColor(0.8, 0.8f, 0.8f))
+    drawBackground(textures.swamp)
+    
+    if gamedata.creating_game {
+        gamedata.creating_game_text.draw(4.0f, 4.0f, -0.99f)
+        return
+    } else {
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        waiting bool = gamedata.waiting_for_connection
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        
+        if waiting {
+            gamedata.creating_game_text.draw(4.0f, 4.0f, -0.99f)
+            return
+        }
+    }
+    
+    if gamedata.is_placing {
+        captMouseViewPosition(undef mouseX float, undef mouseY float)
+        captDrawOpacity(0.5f)
+        drawTexture(gamedata.placing.texture, mouseX - gamedata.placing.w / 2.0f, mouseY - gamedata.placing.h / 2.0f, gamedata.placing.w, gamedata.placing.h, 0.0f, 0.0f)
+        captDrawOpacity(1.0f)
+    }
+    
+    if gamedata.is_selecting {
+        captDrawOpacity(0.5f * 0.25f)
+        captMouseViewPosition(undef mouseX float, undef mouseY float)
+        captDrawTexture(textures.select, gamedata.selectStartX, gamedata.selectStartY, 0.8f, mouseX - gamedata.selectStartX, mouseY - gamedata.selectStartY)
+        captDrawOpacity(1.0f)
+    }
+    
+    each Building in gamedata.buildings {
+        drawTexture(it.texture, it.x - gamedata.cameraX, it.y - gamedata.cameraY, it.w, it.h, it.health as float / it.max_health as float, it.progress)
+    }
+    
+    each Unit in gamedata.units {
+        it.draw()
+    }
+    
+    /*
+    icons 16 *CaptTexture
+    icons[0] = &textures.workerIcon
+    icons[1] = &textures.scoutIcon
+    icons[2] = &textures.mineIcon
+    icons[4] = &textures.outpostIcon
+    icons[5] = &textures.rangeIcon
+    icons[6] = &textures.clubIcon
+    icons[8] = &textures.raiderIcon
+    icons[9] = &textures.marksmenIcon
+    icons[10] = &textures.guardianIcon
+    
+    repeat 16 {
+        x float = cast float (idx % 4)
+        y float = cast float (idx / 4)
+        captDrawTexture(textures.emptyIcon, captViewWidth() - (4 - x) * 32.0f, captViewHeight() - (4 - y) * 32.0f, 32.0f, 32.0f)
+        
+        if icons[idx], captDrawTexture(*(icons[idx]), captViewWidth() - (4 - x) * 32.0f, captViewHeight() - (4 - y) * 32.0f, 32.0f, 32.0f)
+    }
+    */
+    
+    gamedata.resources_text.draw(4.0f, 4.0f, -0.99f)
+    if gamedata.text_timer != 0, gamedata.text.draw(4.0f, 20.0f, -0.99f)
+    if gamedata.show_tick_id != 0, gamedata.tick_id_text.draw(4.0f, captViewHeight() - 16.0f, -0.99f)
+    
+    if gamedata.winner != 0 {
+        characters int = gamedata.winner == 1 ? 9 : 8
+        gamedata.winner_text.draw(captViewWidth() / 2.0f - 20.0f * ((characters - 1) as float * 6.0f / 7.0f + 5.0f / 7.0f) / 2.0f, captViewHeight() / 2.0f - 20.0f / 2.0f, -0.99f)
+    }
+}
+
+func drawBackground(bg POD CaptTexture) {
+    repeat captViewWidth() as usize / 64 + 2 {
+        x float = idx as float * 64.0f
+        repeat captViewHeight() as usize / 64 + 2 {
+            y float = idx as float * 64.0f
+            xd float = fmodf(gamedata.cameraX, 64.0f) + (gamedata.cameraX < 0.0f ? 64.0f : 0.0f)
+            yd float = fmodf(gamedata.cameraY, 64.0f) + (gamedata.cameraY < 0.0f ? 64.0f : 0.0f)
+            captDrawTexture(bg, x - xd, y - yd, 0.99f, 64.0f, 64.0f)
+        }
+    }
+}
+
+func drawTexture(texture POD CaptTexture, x, y, w, h, health_percent, progress_percent float) {
+    // Passes 'z' to captDrawTexture
+    captDrawTexture(texture, x, y, 0.25f - (y + h/2)/2 / captViewHeight(), w, h)
+    if health_percent != 1.0f, captDrawTexture(textures.health, x, y - 16.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w * health_percent, 4.0f)
+    if health_percent != 1.0f, captDrawTexture(textures.select, x, y - 16.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w, 4.0f)
+    if progress_percent != 0.0f, captDrawTexture(textures.select, x, y - 10.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w * progress_percent, 4.0f)
+}
