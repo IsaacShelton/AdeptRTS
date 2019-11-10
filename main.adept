@@ -4,7 +4,7 @@
 #set multiple_marksmen false
 #set multiple_guardians false
 #set enable_developer_features false
-#set fullscreen false
+#set fullscreen true
 
 import '2.2/List.adept'
 import '2.2/captain.adept'
