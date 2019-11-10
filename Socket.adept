@@ -10,11 +10,13 @@
         ioctlsocket(socket, cmd, argp)
 #else
     import 'unix/netdb.adept'
+    import 'unix/fd_set.adept'
     import 'unix/unistd.adept'
     import 'unix/sys/ioctl.adept'
     import 'unix/arpa/inet.adept'
     import 'unix/sys/socket.adept'
     import 'unix/netinet/tcp.adept'
+    import 'unix/sys/select.adept'
     
     alias Socket = int
     alias IOCtlOpt = int

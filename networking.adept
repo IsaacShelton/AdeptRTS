@@ -108,10 +108,75 @@ func client(strong_host_address ptr) ptr {
     
     // TODO: Support IPv6
     memcpy(&serveraddr.sin_addr.s_addr, host.h_addr_list[0], sizeof in_addr)
-    
+
+    /*    
     // TODO: Have timeout for connect()
     if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 {
         printf('connect() failed\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to connect to server"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    */
+    
+    ioctlopt IOCtlOpt = 1
+    ioctlSocket(client_fd, FIONBIO, &ioctlopt)
+    errno = 0
+    
+    if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 && errno != EINPROGRESS {
+        printf('connect() failed [initial]\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to connect to server"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    ioctlopt = 0
+    ioctlSocket(client_fd, FIONBIO, &ioctlopt)
+    
+    timeout timeval = *static timeval (3, 0)
+    bitfield fd_set = undef
+    FD_ZERO(&bitfield)
+    FD_SET(client_fd, &bitfield)
+    
+    #if __windows__
+    max_fd int = 0
+    #else
+    max_fd int = client_fd + 1
+    #end
+    
+    res int = select(max_fd, null, &bitfield, null, &timeout)
+    
+    if res < 0 && errno != EINTR {
+        printf('connect() failed [select() < 0]\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to connect to server"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    if res == 0 {
+        // Timed out
+        printf('connect() failed [select() == 0]\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to connect to server"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    err_opt int = undef
+    len socklen_t = sizeof int
+    if getsockopt(client_fd, SOL_SOCKET, SO_ERROR, &err_opt, &len) < 0 {
+        printf('getsockopt(SO_ERROR) failed\n')
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        gamedata.networking_error = "Failed to connect to server"
+        pthread_mutex_unlock(&gamedata.networking_mutex)
+        return null
+    }
+    
+    if err_opt {
+        printf('connect() failed [err_opt]\n')
         pthread_mutex_lock(&gamedata.networking_mutex)
         gamedata.networking_error = "Failed to connect to server"
         pthread_mutex_unlock(&gamedata.networking_mutex)
