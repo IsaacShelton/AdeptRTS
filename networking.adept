@@ -67,8 +67,6 @@ func server(data ptr) ptr {
         unless validSocket(client_fd), continue
     }
     
-    printf('%p %p %d\n', client_fd, INVALID_SOCKET, client_fd == INVALID_SOCKET ? 1 : 0)
-    
     defer printf('Terminating...\n')
     defer closeSocket(client_fd)
     
@@ -112,7 +110,6 @@ func client(strong_host_address ptr) ptr {
     memcpy(&serveraddr.sin_addr.s_addr, host.h_addr_list[0], sizeof in_addr)
     
     if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 {
-        printf('%d\n', WSAGetLastError())
         printf('connect() failed\n')
         pthread_mutex_lock(&gamedata.networking_mutex)
         gamedata.networking_error = "Failed to connect to server"
