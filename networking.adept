@@ -60,8 +60,7 @@ func server(data ptr) ptr {
         if networkingThreadShouldClose(), return null
         
         ioctlopt IOCtlOpt = 1
-        if ioctlSocket(server_fd, FIONBIO, &ioctlopt) == SOCKET_ERROR,
-            printf('ioctlSocket failed with code %d\n', WSAGetLastError() as int)
+        ioctlSocket(server_fd, FIONBIO, &ioctlopt)
         
         client_length socklen_t = sizeof sockaddr_in
         client_fd = accept(server_fd, undef client sockaddr_in as *sockaddr, &client_length)
