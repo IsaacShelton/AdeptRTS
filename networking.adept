@@ -56,11 +56,11 @@ func server(data ptr) ptr {
     
     client_fd Socket = undef
     
+    ioctlopt IOCtlOpt = 1
+    ioctlSocket(server_fd, FIONBIO, &ioctlopt)
+    
     while continue {
         if networkingThreadShouldClose(), return null
-        
-        ioctlopt IOCtlOpt = 1
-        ioctlSocket(server_fd, FIONBIO, &ioctlopt)
         
         client_length socklen_t = sizeof sockaddr_in
         client_fd = accept(server_fd, undef client sockaddr_in as *sockaddr, &client_length)
@@ -109,6 +109,7 @@ func client(strong_host_address ptr) ptr {
     // TODO: Support IPv6
     memcpy(&serveraddr.sin_addr.s_addr, host.h_addr_list[0], sizeof in_addr)
     
+    // TODO: Have timeout for connect()
     if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 {
         printf('connect() failed\n')
         pthread_mutex_lock(&gamedata.networking_mutex)
