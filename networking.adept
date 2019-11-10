@@ -1,33 +1,12 @@
 
 import 'main.adept'
+import 'Socket.adept'
 import 'NetworkStream.adept'
 
 import '2.2/String.adept'
 import '2.2/terminal.adept'
 import 'sys/cerrno.adept'
 import 'posix/pthread.adept'
-
-#if __windows__
-    import 'windows/winsock.adept'
-#else
-    import 'unix/netdb.adept'
-    import 'unix/unistd.adept'
-    import 'unix/arpa/inet.adept'
-    import 'unix/sys/socket.adept'
-    import 'unix/netinet/tcp.adept'
-#end
-
-foreign ioctl(int, ulong, ...) int
-#if __macos__
-    FIOCLEX == 536897025
-    FIONCLEX == 536897026
-    FIONREAD == 1074030207
-    FIONBIO == 2147772030
-    FIOASYNC == 2147772029
-    FIOSETOWN == 2147772028
-    FIOGETOWN == 1074030203
-    FIODTYPE == 1074030202
-#end
 
 PORT == 5678
 
@@ -47,11 +26,11 @@ func server(data ptr) ptr {
     startupNetworking()
     defer cleanupNetworking()
     
-    server_fd int = socket(AF_INET, SOCK_STREAM, 0)
-    if server_fd < 0,
+    server_fd Socket = socket(AF_INET, SOCK_STREAM, 0)
+    unless validSocket(server_fd),
         printf('socket() failed\n'); return null
     
-    defer close(server_fd)
+    defer closeSocket(server_fd)
     
     server sockaddr_in
     server.sin_family = AF_INET
@@ -80,16 +59,16 @@ func server(data ptr) ptr {
     while continue {
         if networkingThreadShouldClose(), return null
         
-        flags = 1
-        ioctl(server_fd, FIONBIO, &flags)
+        ioctlopt IOCtlOpt = 1
+        ioctl(server_fd, FIONBIO, &ioctlopt)
         
         client_length socklen_t = sizeof sockaddr_in
         client_fd = accept(server_fd, undef client sockaddr_in as *sockaddr, &client_length)
-        if client_fd < 0, continue
+        unless validSocket(client_fd), continue
     }
     
     defer printf('Terminating...\n')
-    defer close(client_fd)
+    defer closeSocket(client_fd)
     
     printf('Connected\n')
     pthread_mutex_lock(&gamedata.networking_mutex)
@@ -104,11 +83,11 @@ func client(strong_host_address ptr) ptr {
     startupNetworking()
     defer cleanupNetworking()
     
-    client_fd int = socket(AF_INET, SOCK_STREAM, 0)
-    if client_fd < 0,
+    client_fd Socket = socket(AF_INET, SOCK_STREAM, 0)
+    unless validSocket(client_fd),
         printf('socket() failed\n'); return null
     
-    defer close(client_fd)
+    defer closeSocket(client_fd)
     
     host *hostent = gethostbyname(strong_host_address)
     delete strong_host_address
@@ -136,7 +115,7 @@ func client(strong_host_address ptr) ptr {
     }
     
     defer printf('Terminating...\n')
-    defer close(client_fd)
+    defer closeSocket(client_fd)
     
     printf('Connected\n')
     pthread_mutex_lock(&gamedata.networking_mutex)
@@ -166,13 +145,13 @@ func transmission(socket int) {
         if networkingThreadShouldClose(), return
         
         // Only receive data if data is ready
-        ioctl(socket, FIONREAD, undef bytes_available int)
+        ioctlSocket(socket, FIONREAD, undef bytes_available IOCtlOpt)
         while bytes_available != 0 {
             // Receive data from network
-            received_length int = recv(socket, buffer, min(bytes_available, buffer_size as int), 0)
+            received_length int = recv(socket, buffer, min(bytes_available as int, buffer_size as int), 0)
             if received_length < 0, printf('recv() failed\n'); return
             istream.writeRaw(buffer, received_length)
-            ioctl(socket, FIONREAD, &bytes_available)
+            ioctlSocket(socket, FIONREAD, &bytes_available)
         }
         
         // Close thread if requested
@@ -200,25 +179,6 @@ func transmission(socket int) {
     }
     
     return
-}
-
-func startupNetworking {
-    errno = 0
-    #if __windows__
-        wsaData WSADATA = undef
-        wsaStartupResult int = WSAStartup(WINSOCK_2_2, &wsaData)
-        
-        if wsaStartupResult != 0 {
-            printf('WSAStartup failed: %d\n', wsaStartupResult)
-            return false
-        }
-    #end
-}
-
-func cleanupNetworking {
-    #if __windows__
-        WSACleanup()
-    #end
 }
 
 func networkingThreadShouldClose bool {

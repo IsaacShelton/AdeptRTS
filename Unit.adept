@@ -1,0 +1,131 @@
+
+import 'main.adept'
+
+alias UnitID = usize
+enum UnitKind (SCOUT, RAIDER, MARKSMEN, GUARDIAN)
+
+struct Unit (
+    id usize,
+    kind UnitKind,
+    texture CaptTexture,
+    x, y, w, h, speed, targetX, targetY float,
+    health, max_health, team int,
+    moving, force_move bool,
+    
+    attack_texture CaptTexture,
+    attack_x_offset, attack_y_offset, attack_w, attack_h float,
+    attack_cooldown, attack_max_cooldown usize,
+    attack_active, attack_max_active usize,
+    attack_damage int
+) {
+    func moveTo(xWorld, yWorld float, force_move bool) {
+        this.targetX = xWorld
+        this.targetY = yWorld
+        this.moving = true
+        this.force_move = force_move
+    }
+    
+    func tickAnimation {
+        if this.attack_active {
+            if --this.attack_active == 0 {
+                this.attack_cooldown = this.attack_max_cooldown
+            }
+        } else {
+            if this.attack_cooldown > 0, this.attack_cooldown--
+        }
+    }
+    
+    func attemptAttack successful {
+        if this.attack_active == 0 && this.attack_cooldown == 0, this.attack_active = this.attack_max_active; return true
+        return false
+    }
+    
+    func draw {
+        if this.attack_active == 0 {
+            drawTexture(this.texture, this.x - gamedata.cameraX, this.y - gamedata.cameraY, this.w, this.h, this.health as float / this.max_health as float, 0.0f)
+        } else {
+            drawTexture(this.attack_texture, this.x - gamedata.cameraX + this.attack_x_offset, this.y - gamedata.cameraY + this.attack_y_offset,
+                this.attack_w, this.attack_h, this.health as float / this.max_health as float, 0.0f)
+        }
+    }
+}
+
+func unit(kind UnitKind, x, y float, team int) Unit {
+    unit POD Unit = undef
+    unit.id = nextId()
+    unit.kind = kind
+    
+    switch kind {
+    case UnitKind::RAIDER
+        unit.texture = team == 1 ? textures.raider_blue : textures.raider_red
+        unit.w = 10.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 4.0f
+        unit.health = 15
+        
+        unit.attack_texture = team == 1 ? textures.raider_attack_blue : textures.raider_attack_red
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = 11.0f * 2.0f
+        unit.attack_h = 11.0f * 2.0f
+        unit.attack_max_cooldown = 30
+        unit.attack_max_active = 5
+        unit.attack_damage = 5
+    case UnitKind::MARKSMEN
+        unit.texture = team == 1 ? textures.marksmen_blue : textures.marksmen_red
+        unit.w = 8.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 3.0f
+        unit.health = 10
+        
+        unit.attack_texture = team == 1 ? textures.marksmen_attack_blue : textures.marksmen_attack_red
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = 7.0f * 2.0f
+        unit.attack_h = 11.0f * 2.0f
+        unit.attack_max_cooldown = 120
+        unit.attack_max_active = 5
+        unit.attack_damage = 20
+    case UnitKind::GUARDIAN
+        unit.texture = team == 1 ? textures.guardian_blue : textures.guardian_red
+        unit.w = 10.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 2.0f
+        unit.health = 20
+        
+        unit.attack_texture = team == 1 ? textures.guardian_attack_blue : textures.guardian_attack_red
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = 14.0f * 2.0f
+        unit.attack_h = 12.0f * 2.0f
+        unit.attack_max_cooldown = 60
+        unit.attack_max_active = 5
+        unit.attack_damage = 15
+    default
+        unit.texture = textures.raider
+        unit.w = 10.0f * 2.0f
+        unit.h = 12.0f * 2.0f
+        unit.speed = 4.0f
+        unit.health = 15
+        
+        unit.attack_texture = unit.texture
+        unit.attack_x_offset = 0.0f
+        unit.attack_y_offset = 0.0f
+        unit.attack_w = unit.w
+        unit.attack_h = unit.h
+        unit.attack_max_cooldown = 30
+        unit.attack_max_active = 5
+        unit.attack_damage = 5
+    }
+    
+    unit.x = x
+    unit.y = y
+    unit.targetX = x
+    unit.targetY = y
+    unit.max_health = unit.health
+    unit.team = team
+    unit.moving = false
+    unit.attack_cooldown = 0
+    unit.attack_active = 0
+    return unit
+}

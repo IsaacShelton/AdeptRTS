@@ -1,0 +1,45 @@
+
+import 'main.adept'
+
+enum BuildingKind (MINE, OUTPOST, RANGE, CLUB)
+
+struct Building (kind BuildingKind, texture CaptTexture, x, y, w, h float, health, max_health, team int, progress float)
+func building(kind BuildingKind, team int) Building {
+    building POD Building = undef
+    building.kind = kind
+    
+    switch kind {
+    case BuildingKind::MINE
+        building.texture = team == 1 ? textures.mine_blue : textures.mine_red
+        building.health = 100
+        building.w = 24.0f * 2.0f
+        building.h = 12.0f * 2.0f
+    case BuildingKind::OUTPOST
+        building.texture = team == 1 ? textures.outpost_blue : textures.outpost_red
+        building.health = 100
+        building.w = 30.0f * 2.0f
+        building.h = 38.0f * 2.0f
+    case BuildingKind::RANGE
+        building.texture = team == 1 ? textures.range_blue : textures.range_red
+        building.health = 100
+        building.w = 40.0f * 2.0f
+        building.h = 14.0f * 2.0f
+    case BuildingKind::CLUB
+        building.texture = team == 1 ? textures.club_blue : textures.club_red
+        building.health = 100
+        building.w = 36.0f * 2.0f
+        building.h = 18.0f * 2.0f
+    default
+        building.texture = textures.mine
+        building.health = 100
+        building.w = 24.0f * 2.0f
+        building.h = 12.0f * 2.0f
+    }
+    
+    building.x = 0.0f
+    building.y = 0.0f
+    building.max_health = building.health
+    building.team = team
+    building.progress = 0.0f
+    return building
+}

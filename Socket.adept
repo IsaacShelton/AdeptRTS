@@ -1,0 +1,43 @@
+
+#if __windows__
+    import 'windows/winsock.adept'
+    
+    alias Socket = SOCKET
+    alias IOCtlOpt = uint
+    func closeSocket(socket Socket) int = closesocket(socket)
+    func validSocket(socket Socket) bool = socket != INVALID_SOCKET
+    func ioctlSocket(socket Socket, cmd uint, argp *IOCtlOpt) int =
+        ioctlsocket(socket, cmd, argp)
+#else
+    import 'unix/netdb.adept'
+    import 'unix/unistd.adept'
+    import 'unix/sys/ioctl.adept'
+    import 'unix/arpa/inet.adept'
+    import 'unix/sys/socket.adept'
+    import 'unix/netinet/tcp.adept'
+    
+    alias Socket = int
+    alias IOCtlOpt = int
+    func closeSocket(socket Socket) int = close(socket)
+    func validSocket(socket Socket) bool = socket >= 0
+    func ioctlSocket(socket Socket, cmd uint, argp *IOCtlOpt) int =
+        ioctl(socket, cmd, argp)
+#end
+
+func startupNetworking successful {
+    errno = 0
+    #if __windows__
+    wsaStartupResult int = WSAStartup(WINSOCK_2_2, undef wsaData WSADATA)    
+    if wsaStartupResult != 0 {
+        printf('WSAStartup failed: %d\n', wsaStartupResult)
+        return false
+    }
+    #end
+    return true
+}
+
+func cleanupNetworking {
+    #if __windows__
+    WSACleanup()
+    #end
+}
