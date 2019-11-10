@@ -124,7 +124,14 @@ func client(strong_host_address ptr) ptr {
     ioctlSocket(client_fd, FIONBIO, &ioctlopt)
     errno = 0
     
-    if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 && errno != EINPROGRESS {
+    #if __windows__
+    // On windows, expect 'WSAEWOULDBLOCK' back after calling connect
+    initial_connect_failed bool = connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 && WSAGetLastError() != WSAEWOULDBLOCK
+    #else
+    // On unix, expect errno to be 'EINPROGRESS'
+    initial_connect_failed bool = connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 && errno != EINPROGRESS
+    #end
+    if initial_connect_failed {
         printf('connect() failed [initial]\n')
         pthread_mutex_lock(&gamedata.networking_mutex)
         gamedata.networking_error = "Failed to connect to server"
