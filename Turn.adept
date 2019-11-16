@@ -1,7 +1,7 @@
 
 import 'main.adept'
 
-struct TurnQueue (turns 3 Turn, is_server bool) {
+struct TurnQueue (turns 3 Turn, is_server, is_single_player bool) {
     func create {
         repeat 3, this.turns[idx].zero()
         repeat 3 {
@@ -9,6 +9,7 @@ struct TurnQueue (turns 3 Turn, is_server bool) {
             this.turns[idx].hasClient = true
         }
         this.is_server = false
+        this.is_single_player = false
     }
     
     func destroy {
@@ -31,6 +32,10 @@ struct TurnQueue (turns 3 Turn, is_server bool) {
     
     func feedInternal(actions Actions) {
         this.turns[2].feedInternal(this.is_server, actions)
+        
+        // If in single player game, have the other player not take any actions
+        if this.is_single_player && !(this.is_server ? this.turns[1].hasClient : this.turns[1].hasServer),
+            this.feedExternal(null, 0)
     }
     
     func feedExternal(data *ubyte, length usize) {
@@ -41,6 +46,12 @@ struct TurnQueue (turns 3 Turn, is_server bool) {
         printf('is_server = %d\n', this.is_server as int)
         repeat 3, this.turns[idx].print()
         printf('\n')
+    }
+    
+    func countQueuedUnits(team int, kind UnitKind) usize {
+        queued usize = 0
+        repeat 3, queued += this.turns[idx].countQueuedUnits(team, kind)
+        return queued
     }
     
     func canShift bool = this.turns[1].hasServer && this.turns[1].hasClient && (this.is_server ? this.turns[2].hasServer : this.turns[2].hasClient)
@@ -89,6 +100,10 @@ struct Turn (server, client Actions, hasServer, hasClient bool) {
             this.server.transferFromNetworkBuffer(data, length)
             this.hasServer = true
         }
+    }
+    
+    func countQueuedUnits(team int, kind UnitKind) usize {
+        return (this.hasServer ? this.server.countQueuedUnits(team, kind) : 0uz) + (this.hasClient ? this.client.countQueuedUnits(team, kind) : 0uz)
     }
     
     func print {

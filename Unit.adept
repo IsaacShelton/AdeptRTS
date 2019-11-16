@@ -2,7 +2,7 @@
 import 'main.adept'
 
 alias UnitID = usize
-enum UnitKind (SCOUT, RAIDER, MARKSMEN, GUARDIAN)
+enum UnitKind (DEAD, RAIDER, MARKSMEN, GUARDIAN, SCOUT)
 
 struct Unit (
     id usize,
@@ -41,6 +41,7 @@ struct Unit (
     }
     
     func draw {
+        if this.kind == UnitKind::DEAD, return
         if this.attack_active == 0 {
             drawTexture(this.texture, this.x - gamedata.cameraX, this.y - gamedata.cameraY, this.w, this.h, this.health as float / this.max_health as float, 0.0f)
         } else {
