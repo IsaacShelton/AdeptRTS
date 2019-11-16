@@ -5,6 +5,7 @@
 #set multiple_guardians false
 #set enable_developer_features false
 #set fullscreen true
+#set windows_release_build false
 
 import '2.2/List.adept'
 import '2.2/captain.adept'
@@ -102,7 +103,12 @@ func main {
 }
 
 func onSetup {
+    #if windows_release_build
+    assetsFolder String = where()
+    #else
     assetsFolder String = where() + "assets/"
+    #end
+    
     captCustomViewBasedOnHeight(480.0f)
     textures.swamp = captTexture(assetsFolder + "swamp.png", false)
     textures.mine = captTexture(assetsFolder + "mine.png", false)
