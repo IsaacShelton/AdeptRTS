@@ -7,6 +7,7 @@
 #set fullscreen true
 
 import '2.2/List.adept'
+import '2.2/audio.adept'
 import '2.2/captain.adept'
 import 'posix/pthread.adept'
 
@@ -71,6 +72,7 @@ struct GameData (
     blue_placed_once, red_placed_once bool,
     winner int,
     winner_text Text,
+    is_single_player bool,
     
     networking_thread pthread_t,
     networking_mutex pthread_mutex_t,
@@ -78,7 +80,13 @@ struct GameData (
     networking_thread_should_close bool,
     networking_error String,
     networking_error_when double,
-    istream, ostream NetworkStream
+    istream, ostream NetworkStream,
+    
+    music_player PlayableSound,
+    music_enabled bool,
+    punch Sound,
+    arrow Sound,
+    sfx 256 SoundPlayer
 )
 
 textures Textures
@@ -102,6 +110,8 @@ func main {
 }
 
 func onSetup {
+    audioInit()
+    
     assetsFolder String = where() + "assets/"
     captCustomViewBasedOnHeight(480.0f)
     textures.swamp = captTexture(assetsFolder + "swamp.png", false)
@@ -160,6 +170,29 @@ func onSetup {
     pthread_mutex_init(&gamedata.networking_mutex, null)
     gamedata.istream.create()
     gamedata.ostream.create()
+    
+    gamedata.music_player.load(assetsFolder + "music.wav", true, 1.0f)
+    gamedata.music_player.play()
+    gamedata.music_enabled = true
+    
+    gamedata.punch.create()
+    gamedata.arrow.create()
+    gamedata.punch.load(assetsFolder + "punch.wav", false, 1.0f)
+    gamedata.arrow.load(assetsFolder + "arrow.wav", false, 1.0f)
+    
+    repeat 256, gamedata.sfx[idx].create()
+}
+
+func load(this *Sound, filename String, looping bool, volume float) {
+    filename_cstr *ubyte = filename.cstr()
+    defer delete filename_cstr
+    this.load(filename_cstr, looping, volume)
+}
+
+func load(this *PlayableSound, filename String, looping bool, volume float) {
+    filename_cstr *ubyte = filename.cstr()
+    defer delete filename_cstr
+    this.load(filename_cstr, looping, volume)
 }
 
 func setupGameState {
@@ -195,6 +228,15 @@ func setupGameState {
     gamedata.artificial_wait = false
 }
 
+func playSFX(this *GameData, sound Sound) {
+    repeat 256 {
+        unless this.sfx[idx].isPlaying() {
+            this.sfx[idx].play(sound)
+            return
+        }
+    }
+}
+
 func createNewGame() {
     gamedata.istream.clear()
     gamedata.ostream.clear()
@@ -214,6 +256,7 @@ func createNewGame() {
     gamedata.winner = 0
     gamedata.winner_text.destroy()
     gamedata.winner_text = text("", 20.0f)
+    gamedata.is_single_player = false
     
     gamedata.waiting_for_connection = true
     gamedata.networking_thread_should_close = false
@@ -241,6 +284,12 @@ func onExit {
     gamedata.istream.destroy()
     gamedata.ostream.destroy()
     gamedata.winner_text.destroy()
+    
+    repeat 256, gamedata.sfx[idx].destroy()
+    gamedata.music_player.destroy()
+    gamedata.punch.destroy()
+    gamedata.arrow.destroy()
+    audioTerminate()
 }
 
 func placingMine(team int) {
@@ -275,7 +324,7 @@ func notEnoughMoney(required int) bool {
 }
 
 func makeRaider(team int) {
-    outpost *Building = findIdleBuilding(team, BuildingKind::OUTPOST)
+    outpost *Building = findIdleBuilding(team, BuildingKind::OUTPOST, true)
     unless outpost, return
     
     #if fast_build_times
@@ -286,7 +335,7 @@ func makeRaider(team int) {
 }
 
 func makeMarksmen(team int) {
-    range *Building = findIdleBuilding(team, BuildingKind::RANGE)
+    range *Building = findIdleBuilding(team, BuildingKind::RANGE, true)
     unless range, return
     
     #if fast_build_times
@@ -297,7 +346,7 @@ func makeMarksmen(team int) {
 }
 
 func makeGuardian(team int) {
-    club *Building = findIdleBuilding(team, BuildingKind::CLUB)
+    club *Building = findIdleBuilding(team, BuildingKind::CLUB, true)
     unless club, return
     
     #if fast_build_times
@@ -307,11 +356,26 @@ func makeGuardian(team int) {
     #end
 }
 
-func findIdleBuilding(team int, kind BuildingKind) *Building {
+func findIdleBuilding(team int, kind BuildingKind, ignore_queue bool) *Building {
+    queued usize = 0
+    
+    unless ignore_queue {
+        unit_kind UnitKind = UnitKind::DEAD
+        
+        switch kind {
+        case BuildingKind::OUTPOST, unit_kind = UnitKind::RAIDER
+        case BuildingKind::RANGE, unit_kind = UnitKind::MARKSMEN
+        case BuildingKind::CLUB, unit_kind = UnitKind::GUARDIAN
+        }
+        
+        queued = unit_kind == UnitKind::DEAD ? 0uz : gamedata.turn_queue.countQueuedUnits(team, unit_kind)
+    }
+    
     each Building in gamedata.buildings {
         if it.team != team, continue
         if it.kind != kind || it.progress != 0.0f, continue
-        return &it
+        if queued == 0, return &it
+        queued--
     }
     return null
 }
@@ -335,7 +399,7 @@ func onStep {
         if gamedata.waiting_for_address,
             gamedata.creating_game_text = text("Enter Server Address: %" % gamedata.input_text, 14.0f)
         else
-            gamedata.creating_game_text = text("server or client: %" % gamedata.input_text, 14.0f)
+            gamedata.creating_game_text = text("server, client, singleplayer or exit: %" % gamedata.input_text, 14.0f)
         
         return
     } else {
@@ -406,6 +470,9 @@ func onStep {
         gamedata.actions.first_command = null
         gamedata.actions.size = 0
         gamedata.actions.count = 0
+        
+        each Unit in gamedata.units, if it.kind == UnitKind::DEAD,
+            gamedata.units.remove(idx--)
     }
     
     tick()
@@ -488,6 +555,8 @@ func tick {
     
     // Spread out units
     each Unit in gamedata.units {
+        if it.kind == UnitKind::DEAD, continue
+        
         if it.moving {
             // Move moving unit and don't spread it
             angle float = atan2(it.y + it.h / 2.0f - it.targetY, it.x + it.w / 2.0f - it.targetX)
@@ -508,8 +577,8 @@ func tick {
         victim_building *Building = null
         
         repeat gamedata.units.length {
-            if idx == unit_index, continue
             other *Unit = gamedata.units.getPointer(idx)
+            if idx == unit_index || other.kind == UnitKind::DEAD, continue
             
             xdiff float = it.x + it.w / 2.0f - other.x - other.w / 2.0f
             ydiff float = it.y + it.h / 2.0f - other.y - other.h / 2.0f
@@ -564,11 +633,14 @@ func tick {
         if should_attack && it.attemptAttack() {
             if victim, victim.health -= it.attack_damage
             else if victim_building, victim_building.health -= it.attack_damage
+            
+            if it.kind == UnitKind::MARKSMEN, gamedata.playSFX(gamedata.arrow)
+            else gamedata.playSFX(gamedata.punch)
         }
     }
     
     each Unit in gamedata.units {
-        if it.health <= 0, gamedata.units.remove(idx--)
+        if it.health <= 0, gamedata.units.getPointer(idx).kind = UnitKind::DEAD
     }
     
     each Building in gamedata.buildings {
@@ -699,6 +771,13 @@ func moveTo(team int, xWorld, yWorld float, force_move bool) {
 
 func onKey(key, scancode, action, mods int) {
     if action == GLFW_PRESS {
+        if key == GLFW_KEY_F1 {
+            gamedata.music_enabled = !gamedata.music_enabled
+            if gamedata.music_enabled, gamedata.music_player.play()
+            else gamedata.music_player.stop()
+            return
+        }
+        
         if gamedata.creating_game {
             if key == GLFW_KEY_BACKSPACE, gamedata.input_text.reduce(1)
             
@@ -708,11 +787,26 @@ func onKey(key, scancode, action, mods int) {
                     gamedata.turn_queue.is_server = gamedata.is_server
                     startClient(gamedata.input_text)
                 } else {
-                    gamedata.is_server = gamedata.input_text == "server"
-                    gamedata.turn_queue.is_server = gamedata.is_server
+                    if gamedata.input_text == "exit" {
+                        glfwSetWindowShouldClose(_captain_window, true)
+                    }
                     
-                    if gamedata.is_server, startServer()
-                    else gamedata.waiting_for_address = true
+                    gamedata.is_single_player = gamedata.input_text == "singleplayer"
+                    
+                    if gamedata.is_single_player {
+                        gamedata.creating_game = false
+                        gamedata.turn_queue.is_server = true
+                        gamedata.turn_queue.is_single_player = true
+                        gamedata.waiting_for_connection = false
+                    } else {
+                        gamedata.is_server = gamedata.input_text == "server"
+                        
+                        gamedata.turn_queue.is_server = gamedata.is_server
+                        gamedata.turn_queue.is_single_player = false
+                        
+                        if gamedata.is_server, startServer()
+                        else gamedata.waiting_for_address = true
+                    }
                 }
                 
                 gamedata.input_text.length = 0
@@ -729,23 +823,38 @@ func onKey(key, scancode, action, mods int) {
         case GLFW_KEY_R, placingRange(gamedata.team)
         case GLFW_KEY_C, placingClub(gamedata.team)
         case GLFW_KEY_Z,
-            if findIdleBuilding(gamedata.team, BuildingKind::OUTPOST) && notEnoughMoney(5), return
+            if findIdleBuilding(gamedata.team, BuildingKind::OUTPOST, false) == null || notEnoughMoney(5), return
             gamedata.actions.addMakeCommand(gamedata.team, UnitKind::RAIDER)
         case GLFW_KEY_X,
-            if findIdleBuilding(gamedata.team, BuildingKind::RANGE) && notEnoughMoney(6), return
+            if findIdleBuilding(gamedata.team, BuildingKind::RANGE, false) == null || notEnoughMoney(6), return
             gamedata.actions.addMakeCommand(gamedata.team, UnitKind::MARKSMEN)
         case GLFW_KEY_F,
-            if findIdleBuilding(gamedata.team, BuildingKind::CLUB) && notEnoughMoney(7), return
+            if findIdleBuilding(gamedata.team, BuildingKind::CLUB, false) == null || notEnoughMoney(7), return
             gamedata.actions.addMakeCommand(gamedata.team, UnitKind::GUARDIAN)
         case GLFW_KEY_ESCAPE, gamedata.is_placing = false
-        
+        case GLFW_KEY_TAB
+            // Switch teams in single player mode
+            #if enable_developer_features
+            gamedata.team = gamedata.team == 1 ? 2 : 1
+            #else
+            if gamedata.is_single_player {
+                gamedata.team = gamedata.team == 1 ? 2 : 1
+            }
+            #end
+        case GLFW_KEY_BACKSPACE
+            pthread_mutex_lock(&gamedata.networking_mutex)
+            gamedata.networking_thread_should_close = true
+            pthread_mutex_unlock(&gamedata.networking_mutex)
+            pthread_join(gamedata.networking_thread, null)
+            createNewGame()
         #if enable_developer_features
-        case GLFW_KEY_TAB, gamedata.team = gamedata.team == 1 ? 2 : 1
         case GLFW_KEY_BACKSLASH, gamedata.artificial_wait = !gamedata.artificial_wait
         case GLFW_KEY_ENTER, gamedata.show_tick_id = !gamedata.show_tick_id
         #end
         }
         
+        // Control Groups
+        /*
         repeat 9, if key == GLFW_KEY_1 + idx {
             key_idx usize = idx
             
@@ -757,21 +866,30 @@ func onKey(key, scancode, action, mods int) {
                 each UnitID in *gamedata.groups.getPointer(key_idx), gamedata.selection.add(it)
             }
         }
+        */
     }
 }
 
 func onChar(codepoint uint) {
     if gamedata.creating_game {
         gamedata.input_text = gamedata.input_text + codepoint as ubyte
-    } else if gamedata.winner != 0 {
-        if codepoint as ubyte == ' 'ub {
-            pthread_mutex_lock(&gamedata.networking_mutex)
-            gamedata.networking_thread_should_close = true
+    } else {
+        pthread_mutex_lock(&gamedata.networking_mutex)
+        if gamedata.winner != 0 || gamedata.waiting_for_connection {
             pthread_mutex_unlock(&gamedata.networking_mutex)
-            pthread_join(gamedata.networking_thread, null)
-            createNewGame()
+            
+            if codepoint as ubyte == ' 'ub {
+                pthread_mutex_lock(&gamedata.networking_mutex)
+                gamedata.networking_thread_should_close = true
+                pthread_mutex_unlock(&gamedata.networking_mutex)
+                pthread_join(gamedata.networking_thread, null)
+                createNewGame()
+            }
+            
+            return
+        } else {
+            pthread_mutex_unlock(&gamedata.networking_mutex)
         }
-        return
     }
 }
 

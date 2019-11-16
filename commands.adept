@@ -32,7 +32,10 @@ struct Command (command_kind CommandKind) {
             select *SelectCommand = this as *SelectCommand
             selection *<UnitID> List = select.team == gamedata.team ? &gamedata.selection : &gamedata.enemy_selection
             selection.clear()
-            repeat 256, if getBit(&select.bytes, idx), selection.add(gamedata.units.getPointer(idx).id)
+            repeat 256, if getBit(&select.bytes, idx) {
+                unit *Unit = gamedata.units.getPointer(idx)
+                unless unit.kind == UnitKind::DEAD, selection.add(unit.id)
+            }
             return
         case CommandKind::MOVE
             move *MoveCommand = this as *MoveCommand
@@ -213,6 +216,17 @@ struct Actions (first_command *Command, size, count usize) {
             command.execute()
             command = this.iterate(command)
         }
+    }
+    
+    func countQueuedUnits(team int, kind UnitKind) usize {
+        queued usize = 0
+        command *Command = this.first_command
+        while command {
+            if command.command_kind == CommandKind::MAKE && (command as *MakeCommand).team == team && (command as *MakeCommand).kind == kind,
+                queued++
+            command = this.iterate(command)
+        }
+        return queued
     }
 }
 

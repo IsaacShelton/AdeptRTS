@@ -13,12 +13,14 @@ PORT == 5678
 func startServer {
     gamedata.creating_game = false
     gamedata.team = 1
+    gamedata.cameraX = gamedata.minX
     pthread_create(&gamedata.networking_thread, null, func &server, null)
 }
 
 func startClient(address String) {
     gamedata.creating_game = false
     gamedata.team = 2
+    gamedata.cameraX = gamedata.maxX - captViewWidth()
     pthread_create(&gamedata.networking_thread, null, func &client, address.cstr())
 }
 
@@ -109,17 +111,6 @@ func client(strong_host_address ptr) ptr {
     // TODO: Support IPv6
     memcpy(&serveraddr.sin_addr.s_addr, host.h_addr_list[0], sizeof in_addr)
 
-    /*    
-    // TODO: Have timeout for connect()
-    if connect(client_fd, &serveraddr as *sockaddr, sizeof sockaddr_in) < 0 {
-        printf('connect() failed\n')
-        pthread_mutex_lock(&gamedata.networking_mutex)
-        gamedata.networking_error = "Failed to connect to server"
-        pthread_mutex_unlock(&gamedata.networking_mutex)
-        return null
-    }
-    */
-    
     ioctlopt IOCtlOpt = 1
     ioctlSocket(client_fd, FIONBIO, &ioctlopt)
     errno = 0
@@ -206,6 +197,12 @@ func transmission(socket Socket) {
     flags int = 1
     if setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &flags, sizeof int) < 0,
         printf('setsockopt(TCP_NODELAY) failed\n'); return
+    
+    // Don't send sigpipe signal on Mac
+    #if __macos__
+    if setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &flags, sizeof int),
+        printf('setsockopt(SO_NOSIGPIPE) failed\n'); return
+    #end
     
     buffer_size usize = 1024
     buffer *ubyte = new ubyte * buffer_size
