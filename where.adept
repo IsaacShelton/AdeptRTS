@@ -2,10 +2,22 @@
 import '2.2/basics.adept'
 
 #if __windows__
+    foreign GetModuleFileNameA(ptr, *ubyte, uint) uint
     func getExecutableLocation String {
         // Returns location of executable on windows
         // NOTE: Returns empty string on failure
-        return ""
+        result POD String = undef
+        result.array = new ubyte * 1024
+        result.capacity = 1024
+        result.ownership = StringOwnership::GIVEN
+        result.length = GetModuleFileNameA(null, result.array, 1024) as usize
+        
+        if result.length == 0 {
+            delete result.array
+            return ""
+        }
+        
+        return result.sub(0, result.last('\\'ub) + 1)
     }
 #end
 
@@ -17,15 +29,22 @@ import '2.2/basics.adept'
         // Returns location of executable on mac
         // NOTE: Returns empty string on failure
         
-        storage 1024 ubyte = undef
         size uint = 1024
+        storage 1024 ubyte = undef
         
         if _NSGetExecutablePath(&storage as *ubyte, &size) != 0,
             return ""
         
-        resolved 4096 ubyte = undef
-        realpath(&storage as *ubyte, &resolved as *ubyte)
-        return string(&resolved as *ubyte)
+        resolved *ubyte = new ubyte * 4096
+        if realpath(&storage as *ubyte, resolved) == null,
+            delete resolved; return ""
+        
+        result POD String = undef
+        result.array = resolved
+        result.length = strlen(resolved)
+        result.capacity = 4096
+        result.ownership = StringOwnership::GIVEN
+        return result
     }
 #end
 
