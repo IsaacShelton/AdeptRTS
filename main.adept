@@ -6,6 +6,7 @@
 #set enable_developer_features true
 #set recording_add_helpers false
 #set fullscreen false
+#set windows_release_build false
 
 import '2.2/List.adept'
 import '2.2/audio.adept'
@@ -92,7 +93,7 @@ struct GameData (
     music_enabled bool,
     punch Sound,
     arrow Sound,
-    sfx 256 SoundPlayer
+    sfx 200 SoundPlayer
 )
 
 textures Textures
@@ -118,7 +119,12 @@ func main {
 func onSetup {
     audioInit()
     
+    #if windows_release_build
+    assetsFolder String = where()
+    #else
     assetsFolder String = where() + "assets/"
+    #end
+    
     captCustomViewBasedOnHeight(480.0f)
     textures.swamp = captTexture(assetsFolder + "swamp.png", false)
     textures.mine = captTexture(assetsFolder + "mine.png", false)
@@ -183,12 +189,10 @@ func onSetup {
     gamedata.music_player.play()
     gamedata.music_enabled = true
     
-    gamedata.punch.create()
-    gamedata.arrow.create()
     gamedata.punch.load(assetsFolder + "punch.wav", false, 1.0f)
     gamedata.arrow.load(assetsFolder + "arrow.wav", false, 1.0f)
     
-    repeat 256, gamedata.sfx[idx].create()
+    repeat 200, gamedata.sfx[idx].create()
 }
 
 func load(this *Sound, filename String, looping bool, volume float) {
@@ -237,7 +241,7 @@ func setupGameState {
 }
 
 func playSFX(this *GameData, sound Sound) {
-    repeat 256 {
+    repeat 200 {
         unless this.sfx[idx].isPlaying() {
             this.sfx[idx].play(sound)
             return
@@ -300,7 +304,7 @@ func onExit {
         gamedata.recording = false
     }
     
-    repeat 256, gamedata.sfx[idx].destroy()
+    repeat 200, gamedata.sfx[idx].destroy()
     gamedata.music_player.destroy()
     gamedata.punch.destroy()
     gamedata.arrow.destroy()
