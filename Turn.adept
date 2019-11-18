@@ -1,7 +1,7 @@
 
 import 'main.adept'
 
-struct TurnQueue (turns 3 Turn, is_server, is_single_player bool) {
+struct TurnQueue (turns 3 Turn, is_server bool) {
     func create {
         repeat 3, this.turns[idx].zero()
         repeat 3 {
@@ -9,7 +9,6 @@ struct TurnQueue (turns 3 Turn, is_server, is_single_player bool) {
             this.turns[idx].hasClient = true
         }
         this.is_server = false
-        this.is_single_player = false
     }
     
     func destroy {
@@ -32,10 +31,6 @@ struct TurnQueue (turns 3 Turn, is_server, is_single_player bool) {
     
     func feedInternal(actions Actions) {
         this.turns[2].feedInternal(this.is_server, actions)
-        
-        // If in single player game, have the other player not take any actions
-        if this.is_single_player && !(this.is_server ? this.turns[1].hasClient : this.turns[1].hasServer),
-            this.feedExternal(null, 0)
     }
     
     func feedExternal(data *ubyte, length usize) {

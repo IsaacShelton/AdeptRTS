@@ -3,13 +3,17 @@
 #set multiple_raiders false
 #set multiple_marksmen false
 #set multiple_guardians false
-#set enable_developer_features false
-#set fullscreen true
+#set enable_developer_features true
+#set recording_add_helpers false
+#set fullscreen false
 
 import '2.2/List.adept'
 import '2.2/audio.adept'
 import '2.2/captain.adept'
 import 'posix/pthread.adept'
+
+import 'sys/ctime.adept'
+import 'sys/cstdio.adept'
 
 import 'Text.adept'
 import 'Turn.adept'
@@ -81,6 +85,8 @@ struct GameData (
     networking_error String,
     networking_error_when double,
     istream, ostream NetworkStream,
+    record *FILE,
+    recording bool,
     
     music_player PlayableSound,
     music_enabled bool,
@@ -170,6 +176,8 @@ func onSetup {
     pthread_mutex_init(&gamedata.networking_mutex, null)
     gamedata.istream.create()
     gamedata.ostream.create()
+    gamedata.recording = false
+    gamedata.record = null
     
     gamedata.music_player.load(assetsFolder + "music.wav", true, 1.0f)
     gamedata.music_player.play()
@@ -238,9 +246,6 @@ func playSFX(this *GameData, sound Sound) {
 }
 
 func createNewGame() {
-    gamedata.istream.clear()
-    gamedata.ostream.clear()
-    
     gamedata.turn_queue.is_server = false
     gamedata.turn_queue.destroy()
     gamedata.turn_queue.create()
@@ -265,6 +270,11 @@ func createNewGame() {
     gamedata.istream.clear()
     gamedata.ostream.clear()
     
+    if gamedata.recording {
+        fclose(gamedata.record)
+        gamedata.recording = false
+    }
+    
     setupGameState()
 }
 
@@ -284,6 +294,11 @@ func onExit {
     gamedata.istream.destroy()
     gamedata.ostream.destroy()
     gamedata.winner_text.destroy()
+    
+    if gamedata.recording {
+        fclose(gamedata.record)
+        gamedata.recording = false
+    }
     
     repeat 256, gamedata.sfx[idx].destroy()
     gamedata.music_player.destroy()
@@ -360,7 +375,7 @@ func findIdleBuilding(team int, kind BuildingKind, ignore_queue bool) *Building 
     queued usize = 0
     
     unless ignore_queue {
-        unit_kind UnitKind = UnitKind::DEAD
+        unit_kind UnitKind = UnitKind::NONE
         
         switch kind {
         case BuildingKind::OUTPOST, unit_kind = UnitKind::RAIDER
@@ -368,7 +383,7 @@ func findIdleBuilding(team int, kind BuildingKind, ignore_queue bool) *Building 
         case BuildingKind::CLUB, unit_kind = UnitKind::GUARDIAN
         }
         
-        queued = unit_kind == UnitKind::DEAD ? 0uz : gamedata.turn_queue.countQueuedUnits(team, unit_kind)
+        queued = unit_kind == UnitKind::NONE ? 0uz : gamedata.turn_queue.countQueuedUnits(team, unit_kind)
     }
     
     each Building in gamedata.buildings {
@@ -437,7 +452,8 @@ func onStep {
     
     if gamedata.show_tick_id {
         gamedata.tick_id_text.destroy()
-        gamedata.tick_id_text = text("Tick ID: % Artificial Wait: %" % gamedata.tick_id as int % (gamedata.artificial_wait ? "true" : "false"), 14.0f)
+        gamedata.tick_id_text = text("Tick ID: % Artificial Wait: % Recording: %" % gamedata.tick_id as int % (gamedata.artificial_wait ? "true" : "false") %
+            (gamedata.recording ? "true" : "false"), 14.0f)
     }
     
     // Read from input network stream
@@ -463,16 +479,47 @@ func onStep {
         
         // The local user can't do anything the first turn
         gamedata.actions.transferToNetworkStream(&gamedata.ostream)
-        gamedata.actions.ntoh() // Hack
         
+        // Record actions if recording
+        if gamedata.recording {
+            size uint = htonl(gamedata.actions.size as uint)
+            fwrite(&size, sizeof uint, 1, gamedata.record)
+            fwrite(gamedata.actions.first_command, gamedata.actions.size, 1, gamedata.record)
+            
+            #if recording_add_helpers
+                #if __little_endian__
+                helper uint = swapEndiannessUInt(0xEEEEEEEEui)
+                #else
+                helper uint = 0xEEEEEEEEui
+                #end
+                
+                c *Command = gamedata.actions.first_command
+                while c {
+                    switch ntoh64(c.command_kind as usize) as CommandKind {
+                    case CommandKind::BUILD, fwrite('b', sizeof ubyte, 1, gamedata.record)
+                    case CommandKind::SELECT, fwrite('s', sizeof ubyte, 1, gamedata.record)
+                    case CommandKind::MOVE, fwrite('o', sizeof ubyte, 1, gamedata.record)
+                    case CommandKind::MAKE, fwrite('a', sizeof ubyte, 1, gamedata.record)
+                    }
+                    c = gamedata.actions.iterateWithHeadSizeInNetworkOrder(c)
+                }
+                
+                fwrite(&helper, sizeof uint, 1, gamedata.record)
+            #end
+        }
+        
+        // Feed actions to internal turn queue
+        gamedata.actions.ntoh() // Hack
         gamedata.turn_queue.feedInternal(gamedata.actions)
+        
+        // If in single player game, have the other player not take any actions
+        if gamedata.is_single_player && gamedata.turn_queue.waitingOnNetwork() && gamedata.istream.getLength() == 0 {
+            gamedata.turn_queue.feedExternal(null, 0)
+        }
         
         gamedata.actions.first_command = null
         gamedata.actions.size = 0
         gamedata.actions.count = 0
-        
-        each Unit in gamedata.units, if it.kind == UnitKind::DEAD,
-            gamedata.units.remove(idx--)
     }
     
     tick()
@@ -555,8 +602,6 @@ func tick {
     
     // Spread out units
     each Unit in gamedata.units {
-        if it.kind == UnitKind::DEAD, continue
-        
         if it.moving {
             // Move moving unit and don't spread it
             angle float = atan2(it.y + it.h / 2.0f - it.targetY, it.x + it.w / 2.0f - it.targetX)
@@ -578,7 +623,7 @@ func tick {
         
         repeat gamedata.units.length {
             other *Unit = gamedata.units.getPointer(idx)
-            if idx == unit_index || other.kind == UnitKind::DEAD, continue
+            if idx == unit_index, continue
             
             xdiff float = it.x + it.w / 2.0f - other.x - other.w / 2.0f
             ydiff float = it.y + it.h / 2.0f - other.y - other.h / 2.0f
@@ -640,7 +685,7 @@ func tick {
     }
     
     each Unit in gamedata.units {
-        if it.health <= 0, gamedata.units.getPointer(idx).kind = UnitKind::DEAD
+        if it.health <= 0, gamedata.units.remove(idx--)
     }
     
     each Building in gamedata.buildings {
@@ -778,6 +823,33 @@ func onKey(key, scancode, action, mods int) {
             return
         }
         
+        if key == GLFW_KEY_HOME {
+            if gamedata.recording {
+                fclose(gamedata.record)
+                gamedata.recording = false
+                return
+            }
+            
+            filename *ubyte = new ubyte * 64
+            defer delete filename
+            
+            gamedata.recording = true
+            
+            #if __windows__
+            sprintf(filename, '%I64u.txt', time(null) as ulong)
+            #else
+            sprintf(filename, '%llu.txt', time(null) as ulong)
+            #end
+            
+            gamedata.record = fopen(filename, 'wb')
+            
+            unless gamedata.record {
+                printf('INTERNAL ERROR: Failed to open output recording file\n')
+                gamedata.recording = false
+                return
+            }
+        }
+        
         if gamedata.creating_game {
             if key == GLFW_KEY_BACKSPACE, gamedata.input_text.reduce(1)
             
@@ -796,13 +868,27 @@ func onKey(key, scancode, action, mods int) {
                     if gamedata.is_single_player {
                         gamedata.creating_game = false
                         gamedata.turn_queue.is_server = true
-                        gamedata.turn_queue.is_single_player = true
                         gamedata.waiting_for_connection = false
+                        
+                        // Read input recording if using one
+                        input_recording *FILE = fopen('input_recording.txt', 'rb')
+                        if input_recording {
+                            printf('Reading input recording...\n')
+                            fseek(input_recording, 0, SEEK_END)
+                            size usize = ftell(input_recording)
+                            printf('Recording is %d bytes in size\n', size)
+                            
+                            buffer *ubyte = new ubyte * size
+                            defer delete buffer
+                            
+                            fseek(input_recording, 0, SEEK_SET)
+                            fread(buffer, size, 1, input_recording)
+                            fclose(input_recording)
+                            gamedata.istream.writeRaw(buffer, size)
+                        }
                     } else {
                         gamedata.is_server = gamedata.input_text == "server"
-                        
                         gamedata.turn_queue.is_server = gamedata.is_server
-                        gamedata.turn_queue.is_single_player = false
                         
                         if gamedata.is_server, startServer()
                         else gamedata.waiting_for_address = true

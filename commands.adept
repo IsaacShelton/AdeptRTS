@@ -1,14 +1,21 @@
 
 import 'main.adept'
 
-enum CommandKind (BUILD, SELECT, MOVE, MAKE)
+enum CommandKind (BUILD, OLD_SELECT, MOVE, MAKE, SELECT)
 struct Command (command_kind CommandKind) {
-    func getSize usize {
-        switch this.command_kind {
+    func getSize usize = this.getSize(false)
+    func getSizeFromNetworkOrdered usize = this.getSize(true)
+    
+    func getSize(is_network_ordered bool) usize {
+        command_kind CommandKind = is_network_ordered ? ntoh64(this.command_kind as usize) as CommandKind : this.command_kind
+        switch command_kind {
         case CommandKind::BUILD,  return sizeof BuildCommand
-        case CommandKind::SELECT, return sizeof SelectCommand
+        case CommandKind::OLD_SELECT, return sizeof OldSelectCommand
         case CommandKind::MOVE,   return sizeof MoveCommand
         case CommandKind::MAKE,   return sizeof MakeCommand
+        case CommandKind::SELECT, return (this as *SelectCommand).getSize(is_network_ordered)
+        default
+            printf('INTERNAL ERROR: Command.getSize(%s) got unknown CommandKind %08X %08X\n', is_network_ordered ? 'true' : 'false', command_kind as uint, htonl(command_kind as uint))
         }
         return 0
     }
@@ -28,13 +35,15 @@ struct Command (command_kind CommandKind) {
             }
             
             return
-        case CommandKind::SELECT
-            select *SelectCommand = this as *SelectCommand
+        case CommandKind::OLD_SELECT
+            select *OldSelectCommand = this as *OldSelectCommand
             selection *<UnitID> List = select.team == gamedata.team ? &gamedata.selection : &gamedata.enemy_selection
             selection.clear()
             repeat 256, if getBit(&select.bytes, idx) {
                 unit *Unit = gamedata.units.getPointer(idx)
-                unless unit.kind == UnitKind::DEAD, selection.add(unit.id)
+                // NOTE: UnitKind::DEAD removed as of Nov 17 2019 - Isaac Shelton
+                /* unless unit.kind == UnitKind::DEAD, selection.add(unit.id) */
+                selection.add(unit.id)
             }
             return
         case CommandKind::MOVE
@@ -47,7 +56,27 @@ struct Command (command_kind CommandKind) {
             case UnitKind::RAIDER,   makeRaider(make.team)
             case UnitKind::MARKSMEN, makeMarksmen(make.team)
             case UnitKind::GUARDIAN, makeGuardian(make.team)
+            default printf('Unknown unit %08X for make Command in execute()\n', make.kind as usize)
             }
+            return
+        case CommandKind::SELECT
+            select *SelectCommand = this as *SelectCommand
+            selection *<UnitID> List = select.team == gamedata.team ? &gamedata.selection : &gamedata.enemy_selection
+            selection.clear()
+            
+            if select.count > 256 {
+                printf('INTERNAL ERROR: Sanity check in Command.execute() select.count > 256 failed, ignoring command\n')
+                return
+            }
+            
+            next_id *uint = cast *uint (select as *ubyte + sizeof SelectCommand as ptr)
+            repeat select.count {
+                selection.add(*next_id + select.base)
+                next_id = cast *uint (next_id as *ubyte + sizeof uint as ptr)
+            }
+            return
+        default
+            printf('Unknown Command in execute()\n')
         }
     }
     
@@ -55,8 +84,8 @@ struct Command (command_kind CommandKind) {
         switch this.command_kind {
         case CommandKind::BUILD
             printf('Build %s\n', buildKindName((this as *BuildCommand).kind))
-        case CommandKind::SELECT
-            printf('Select\n')
+        case CommandKind::OLD_SELECT
+            printf('Old Select\n')
         case CommandKind::MOVE
             printf('Move team %d to %f, %f\n', (this as *MoveCommand).team, (this as *MoveCommand).x as double, (this as *MoveCommand).y as double)
             return
@@ -65,22 +94,28 @@ struct Command (command_kind CommandKind) {
             case UnitKind::RAIDER,   printf('Make raider\n')
             case UnitKind::MARKSMEN, printf('Make marksmen\n')
             case UnitKind::GUARDIAN, printf('Make guardian\n')
+            default printf('Make unknown unit\n')
             }
+        case CommandKind::SELECT
+            printf('Select\n')
+        default
+            printf('Unknown Command in print()\n')
         }
     }
     
-    func hton {
+    func convert(from_host_to_network bool) {
         #if __little_endian__
+        command_kind CommandKind = from_host_to_network ? this.command_kind : ntoh64(this.command_kind as usize) as CommandKind
         this.command_kind = hton64(this.command_kind as usize) as CommandKind
         
-        switch this.command_kind {
+        switch command_kind {
         case CommandKind::BUILD
             build *BuildCommand = this as *BuildCommand
             build.kind = hton64(build.kind as usize) as BuildingKind
             *cast *uint &build.x = htonl(*cast *uint &build.x)
             *cast *uint &build.y = htonl(*cast *uint &build.y)
             return
-        case CommandKind::SELECT
+        case CommandKind::OLD_SELECT
             // Nothing to do
             return
         case CommandKind::MOVE
@@ -92,21 +127,52 @@ struct Command (command_kind CommandKind) {
             make *MakeCommand = this as *MakeCommand
             make.kind = hton64(make.kind as usize) as UnitKind
             return
+        case CommandKind::SELECT
+            select *SelectCommand = this as *SelectCommand
+            
+            if !from_host_to_network {
+                select.count = ntohl(select.count)
+            }
+            
+            next_id *uint = cast *uint (select as *ubyte + sizeof SelectCommand as ptr)
+            repeat select.count {
+                *next_id = htonl(*next_id)
+                next_id = cast *uint (next_id as *ubyte + sizeof uint as ptr)
+            }
+            
+            if from_host_to_network {
+                select.count = htonl(select.count)
+            }
+            
+            select.base = htonl(select.base)
+        default
+            printf('INTERNAL ERROR: Command.convert(%s) got unknown CommandKind %08X %08X\n', from_host_to_network ? 'true' : 'false', command_kind as uint, htonl(command_kind as uint))
         }
+        #end
+    }
+    
+    func hton {
+        #if __little_endian__
+        this.convert(true) // Works because hton and ntoh are mostly symmetrical
         #end
     }
     
     func ntoh {
         #if __little_endian__
-        this.hton() // Works because hton and ntoh are symmetrical
+        this.convert(false) // Works because hton and ntoh are mostly symmetrical
         #end
     }
 }
 
 packed struct BuildCommand (struct Command, team ubyte, kind BuildingKind, x, y float)
-packed struct SelectCommand (struct Command, team ubyte, bytes 32 ubyte)
+packed struct OldSelectCommand (struct Command, team ubyte, bytes 32 ubyte)
 packed struct MoveCommand (struct Command, team ubyte, x, y float)
 packed struct MakeCommand (struct Command, team ubyte, kind UnitKind)
+packed struct SelectCommand (struct Command, team ubyte, count uint, base uint /* data 0 uint */)
+
+func getSize(this *SelectCommand, is_network_ordered bool) usize {
+    return sizeof SelectCommand + (is_network_ordered ? ntohl(this.count) : this.count) * sizeof uint
+}
 
 struct Actions (first_command *Command, size, count usize) {
     func clear {
@@ -142,13 +208,64 @@ struct Actions (first_command *Command, size, count usize) {
         this.addCommand(&command as *Command)
     }
     
-    func addSelectCommand(team int, bytes 32 ubyte) {
-        command SelectCommand
-        command.command_kind = CommandKind::SELECT
+    func addOldSelectCommand(team int, bytes 32 ubyte) {
+        command OldSelectCommand
+        command.command_kind = CommandKind::OLD_SELECT
         command.team = team
         command.bytes = bytes
         // (rest is auto zeroed)
         this.addCommand(&command as *Command)
+    }
+    
+    func addSelectCommand(team int, bytes 32 ubyte) {
+        // Use bitflags 'bytes' that mark whether each unit should be selected
+        // to construct a SelectCommand
+        
+        // Determine 'count' of units selected as well as the minimum unit id
+        count usize = 0
+        min_unit_id usize = -1
+        repeat 256, if getBit(&bytes, idx) {
+            if idx >= gamedata.units.length {
+                printf('INTERNAL ERROR: addSelectCommand() got bits for units out of range\n')
+                return
+            }
+            
+            id usize = gamedata.units.getPointer(idx).id
+            if id < min_unit_id, min_unit_id = id
+            count++
+        }
+        
+        // Allocate space for SelectCommand
+        command *SelectCommand = cast *SelectCommand new ubyte * (sizeof SelectCommand + count * sizeof uint)
+        defer delete command
+        
+        // Fill in core info for SelectCommand
+        command.command_kind = CommandKind::SELECT
+        command.team = team
+        command.count = count
+        command.base = min_unit_id
+        
+        // Write unit id's to SelectCommand as offset by 'command.base'
+        next_id_to_write *uint = cast *uint (command as *ubyte + sizeof SelectCommand as ptr)
+        if count != 0, repeat 256 {
+            if getBit(&bytes, idx) {
+                id usize = gamedata.units.getPointer(idx).id
+                
+                if id - min_unit_id > 0xFFFFFFFF {
+                    printf('INTERNAL ERROR: Too great of span to select in addSelectCommand(), ignoring\n')
+                }
+                
+                if gamedata.units.getPointer(idx).team != team {
+                    printf('INTERNAL ERROR: Selecting enemy units in addSelectCommand(), ignoring\n')
+                }
+                
+                *next_id_to_write = id - min_unit_id
+                next_id_to_write = cast *uint (next_id_to_write + sizeof uint as ptr)
+            }
+        }
+        
+        // Add command to 'Actions' list
+        this.addCommand(command as *Command)
     }
     
     func addMakeCommand(team int, kind UnitKind) {
@@ -173,19 +290,29 @@ struct Actions (first_command *Command, size, count usize) {
         command *Command = this.first_command
         while command {
             command.hton()
-            command = this.iterate(command)
+            command = this.iterateWithHeadSizeInNetworkOrder(command)
         }
         #end
     }
     
     func ntoh {
         #if __little_endian__
-        this.hton() // Works because hton and ntoh are symmetrical
+        command *Command = this.first_command
+        while command {
+            command.ntoh()
+            command = this.iterate(command)
+        }
         #end
     }
     
     func iterate(head *Command) *Command {
         head = cast *Command (head as *ubyte + head.getSize() as ptr)
+        return head as *ubyte == this.first_command as *ubyte + this.size as ptr ? null as *Command : head
+    }
+    
+    func iterateWithHeadSizeInNetworkOrder(head *Command) *Command {
+        head_size usize = head.getSizeFromNetworkOrdered()
+        head = cast *Command (head as *ubyte + head_size as ptr)
         return head as *ubyte == this.first_command as *ubyte + this.size as ptr ? null as *Command : head
     }
     
