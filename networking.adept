@@ -77,7 +77,7 @@ func server(data ptr) ptr {
     gamedata.waiting_for_connection = false
     pthread_mutex_unlock(&gamedata.networking_mutex)
     
-    transmission(client_fd)
+    transmission(client_fd, true)
     return null
 }
 
@@ -189,14 +189,18 @@ func client(strong_host_address ptr) ptr {
     gamedata.waiting_for_connection = false
     pthread_mutex_unlock(&gamedata.networking_mutex)
     
-    transmission(client_fd)
+    transmission(client_fd, false)
     return null
 }
 
-func transmission(socket Socket) {
+func transmission(socket Socket, is_server bool) {
     flags int = 1
     if setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &flags, sizeof int) < 0,
         printf('setsockopt(TCP_NODELAY) failed\n'); return
+    
+    ioctlopt IOCtlOpt = 1
+    if ioctlSocket(socket, FIONBIO, &ioctlopt) < 0,
+        printf('ioctlSocket(FIONBIO) failed [transmission]\n'); return
     
     // Don't send sigpipe signal on Mac
     #if __macos__
@@ -219,6 +223,7 @@ func transmission(socket Socket) {
         
         // Only receive data if data is ready
         ioctlSocket(socket, FIONREAD, undef bytes_available IOCtlOpt)
+        
         while bytes_available != 0 {
             // Receive data from network
             received_length int = recv(socket, buffer, min(bytes_available as int, buffer_size as int), 0)

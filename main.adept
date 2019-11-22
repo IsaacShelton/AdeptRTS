@@ -7,6 +7,7 @@
 #set recording_add_helpers false
 #set fullscreen false
 #set windows_release_build false
+#set music_enabled false
 
 import '2.2/List.adept'
 import '2.2/audio.adept'
@@ -186,8 +187,13 @@ func onSetup {
     gamedata.record = null
     
     gamedata.music_player.load(assetsFolder + "music.wav", true, 1.0f)
+    
+    #if music_enabled
     gamedata.music_player.play()
     gamedata.music_enabled = true
+    #else
+    gamedata.music_enabled = false
+    #end
     
     gamedata.punch.load(assetsFolder + "punch.wav", false, 1.0f)
     gamedata.arrow.load(assetsFolder + "arrow.wav", false, 1.0f)
@@ -873,23 +879,6 @@ func onKey(key, scancode, action, mods int) {
                         gamedata.creating_game = false
                         gamedata.turn_queue.is_server = true
                         gamedata.waiting_for_connection = false
-                        
-                        // Read input recording if using one
-                        input_recording *FILE = fopen('input_recording.txt', 'rb')
-                        if input_recording {
-                            printf('Reading input recording...\n')
-                            fseek(input_recording, 0, SEEK_END)
-                            size usize = ftell(input_recording)
-                            printf('Recording is %d bytes in size\n', size)
-                            
-                            buffer *ubyte = new ubyte * size
-                            defer delete buffer
-                            
-                            fseek(input_recording, 0, SEEK_SET)
-                            fread(buffer, size, 1, input_recording)
-                            fclose(input_recording)
-                            gamedata.istream.writeRaw(buffer, size)
-                        }
                     } else {
                         gamedata.is_server = gamedata.input_text == "server"
                         gamedata.turn_queue.is_server = gamedata.is_server
@@ -940,6 +929,23 @@ func onKey(key, scancode, action, mods int) {
         #if enable_developer_features
         case GLFW_KEY_BACKSLASH, gamedata.artificial_wait = !gamedata.artificial_wait
         case GLFW_KEY_ENTER, gamedata.show_tick_id = !gamedata.show_tick_id
+        case GLFW_KEY_F2
+            // Read input recording if using one
+            input_recording *FILE = fopen('input_recording.txt', 'rb')
+            if input_recording {
+                printf('Reading input recording...\n')
+                fseek(input_recording, 0, SEEK_END)
+                size usize = ftell(input_recording)
+                printf('Recording is %d bytes in size\n', size)
+                
+                buffer *ubyte = new ubyte * size
+                defer delete buffer
+                
+                fseek(input_recording, 0, SEEK_SET)
+                fread(buffer, size, 1, input_recording)
+                fclose(input_recording)
+                gamedata.istream.writeRaw(buffer, size)
+            }
         #end
         }
         
