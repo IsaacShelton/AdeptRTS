@@ -3,13 +3,32 @@ import 'main.adept'
 
 func checksum(this *GameData) ubyte {
     address ulong = 0
-    //each Building in this.buildings {
-    //    address = hashStruct(address, &it)
-    //}
+    each Building in this.buildings {
+        address = hashStruct(address, &it)
+    }
     each Unit in this.units {
         address = hashStruct(address, &it)
     }
-    //address = hashStruct(address, &this.next_id)
+    address = hashStruct(address, &this.next_id)
+    
+    #if debug_checksum
+    buildings_hash ulong = 0
+    each Building in this.buildings, buildings_hash = hashStruct(buildings_hash, &it)
+    
+    units_hash ulong = 0
+    each Unit in this.units, units_hash = hashStruct(units_hash, &it)
+    
+    printf('HASH INFO for 0x%02X:\n', (address % 256) as ubyte as int)
+    printf('buildings (hash: %02X): ', buildings_hash)
+    each Building in this.buildings, printf('{%s, %d, %d, %f} ', buildKindName(it.kind), it.team as int, it.health as int, it.progress as double)
+    printf('\n')
+    printf('units (hash: %02X): ', units_hash)
+    each Unit in this.units, printf('%d ', it.id as int)
+    printf('\n')
+    printf('next_id = %d\n', this.next_id as int)
+    printf('--------------------\n', units_hash)
+    #end
+    
     return (address % 256) as ubyte
 }
 

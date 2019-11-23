@@ -14,6 +14,7 @@ func startServer {
     gamedata.creating_game = false
     gamedata.team = 1
     gamedata.cameraX = gamedata.minX
+    gamedata.turn_queue.is_server = true
     pthread_create(&gamedata.networking_thread, null, func &server, null)
 }
 
@@ -21,6 +22,7 @@ func startClient(address String) {
     gamedata.creating_game = false
     gamedata.team = 2
     gamedata.cameraX = gamedata.maxX - captViewWidth()
+    gamedata.turn_queue.is_server = false
     pthread_create(&gamedata.networking_thread, null, func &client, address.cstr())
 }
 
