@@ -1,5 +1,5 @@
 
-#set fullscreen                false
+#set fullscreen                true
 #set music_enabled             true
 #set fast_build_times          false
 #set multiple_raiders          false
