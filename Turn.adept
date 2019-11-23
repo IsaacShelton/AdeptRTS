@@ -108,7 +108,7 @@ struct Turn (server, client Actions, hasServer, hasClient bool, checksum ubyte) 
             gamedata.text = text("Out of Sync", 14.0f);
             gamedata.text_timer = 60
             
-            printf('INTERNAL ERROR: feedExternal() checksum mismatch\n')
+            printf('INTERNAL ERROR: feedExternal() checksum mismatch 0x%02X 0x%02X\n', this.checksum as int, data[0] as int)
         }
         
         if we_are_server {

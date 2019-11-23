@@ -3,13 +3,13 @@ import 'main.adept'
 
 func checksum(this *GameData) ubyte {
     address ulong = 0
-    each Building in this.buildings {
-        address = hashStruct(address, &it)
-    }
+    //each Building in this.buildings {
+    //    address = hashStruct(address, &it)
+    //}
     each Unit in this.units {
         address = hashStruct(address, &it)
     }
-    address = hashStruct(address, &this.next_id)
+    //address = hashStruct(address, &this.next_id)
     return (address % 256) as ubyte
 }
 

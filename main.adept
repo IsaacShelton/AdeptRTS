@@ -96,7 +96,8 @@ struct GameData (
     music_enabled bool,
     punch Sound,
     arrow Sound,
-    sfx 200 SoundPlayer
+    sfx 200 SoundPlayer,
+    textures_original Textures
 )
 
 textures Textures
@@ -204,6 +205,7 @@ func onSetup {
     gamedata.arrow.load(assetsFolder + "arrow.wav", false, 1.0f)
     
     repeat 200, gamedata.sfx[idx].create()
+    gamedata.textures_original = textures
 }
 
 func load(this *Sound, filename String, looping bool, volume float) {
@@ -423,6 +425,16 @@ func guardianUnit(x, y float, team int) {
 }
 
 func onStep {
+    if memcmp(&textures, &gamedata.textures_original, sizeof Textures) != 0 {
+        printf('INTERNAL ERROR: textures != gamedata.textures_original\n')
+        printBytes(&textures, sizeof Textures)
+        printBytes(&gamedata.textures_original, sizeof Textures)
+        
+        gamedata.text.destroy()
+        gamedata.text = text("Textures are Corrupted", 14.0f);
+        gamedata.text_timer = 60
+    }
+    
     if gamedata.creating_game {
         gamedata.creating_game_text.destroy()
         
@@ -1127,4 +1139,10 @@ func debug(format *ubyte, one $A, two $B, three $C) void {
     #if enable_debug_logging
     printf(message, one, two, three)
     #end
+}
+
+func printBytes(data ptr, length usize) {
+    printf('printBytes(%p, %llu): ', data, length)
+    repeat length, printf('%02X ', (data as *ubyte)[idx] as int)
+    printf('\n')
 }
