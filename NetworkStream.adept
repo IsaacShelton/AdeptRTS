@@ -1,11 +1,12 @@
 
 import 'posix/pthread.adept'
 
-struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t) {
+struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t, debug_name *ubyte) {
     func create {
         this.buffer = null
         this.length = 0
         pthread_mutex_init(&this.mutex, null)
+        this.debug_name = 'Unnamed'
     }
     
     func destroy {
@@ -25,7 +26,8 @@ struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t) {
         // Returns an allocated buffer of the next frame's contents if available, otherwise 'null'
         
         // Ensure we have a frame available
-        if !this.peekFrame(undef bytes uint) || this.length < sizeof uint + bytes as usize {
+        if !this.peekFrame(undef bytes uint) || this.getLength() < sizeof uint + bytes as usize {
+            *allocated = null
             *length = 0
             return false
         }
@@ -34,7 +36,7 @@ struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t) {
         this.advance(sizeof uint)
         
         // Special case for zero length frames
-        if bytes == 0, *length = 0; *allocated = null; return true
+        if bytes == 0, *allocated = null; *length = 0; return true
         
         // Read frame contents into buffer
         buffer *ubyte = new ubyte * bytes
@@ -43,6 +45,12 @@ struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t) {
             delete buffer
             return false
         }
+        
+        #if enable_debug_logging
+        printf('[%s] FRAME OF SIZE %d: ', this.debug_name, bytes as int)
+        repeat bytes, printf('%02X ', buffer[idx] as int)
+        printf('\n')
+        #end
         
         *allocated = buffer
         *length = bytes
@@ -70,6 +78,13 @@ struct NetworkStream (buffer *ubyte, length usize, mutex pthread_mutex_t) {
         this.buffer = realloc(this.buffer, this.length + data_length)
         memcpy(this.buffer at this.length, data, data_length)
         this.length += data_length
+        
+        #if enable_debug_logging
+        printf('[%s] WROTE BYTES OF SIZE %d: ', this.debug_name, data_length as int)
+        repeat data_length, printf('%02X ', data[idx] as int)
+        printf('\n')
+        #end
+        
         this.unlock()
     }
     

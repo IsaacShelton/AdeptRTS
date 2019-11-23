@@ -6,7 +6,14 @@ struct Command (command_kind CommandKind) {
     func getSize usize = this.getSize(false)
     func getSizeFromNetworkOrdered usize = this.getSize(true)
     
-    func getSize(is_network_ordered bool) usize {
+    func getSize(is_network_order bool) usize {
+        size usize = this.getSizeUnwrapped(is_network_order)
+        debug('size = %d\n', size as int)
+        if size == 0, exit(1)
+        return size
+    }
+    
+    func getSizeUnwrapped(is_network_ordered bool) usize {
         command_kind CommandKind = is_network_ordered ? ntoh64(this.command_kind as usize) as CommandKind : this.command_kind
         switch command_kind {
         case CommandKind::BUILD,  return sizeof BuildCommand
@@ -15,12 +22,17 @@ struct Command (command_kind CommandKind) {
         case CommandKind::MAKE,   return sizeof MakeCommand
         case CommandKind::SELECT, return (this as *SelectCommand).getSize(is_network_ordered)
         default
-            printf('INTERNAL ERROR: Command.getSize(%s) got unknown CommandKind %08X %08X\n', is_network_ordered ? 'true' : 'false', command_kind as uint, htonl(command_kind as uint))
+            printf('INTERNAL ERROR: Command.getSize(%s) got unknown CommandKind %llu %llu\n', is_network_ordered ? 'true' : 'false', command_kind as ulong, hton64(command_kind as ulong) as ulong)
+            exit(1)
         }
         return 0
     }
     
     func execute {
+        #if enable_debug_logging
+        this.print()
+        #end
+        
         switch this.command_kind {
         case CommandKind::BUILD
             build *BuildCommand = this as *BuildCommand
@@ -97,7 +109,7 @@ struct Command (command_kind CommandKind) {
             default printf('Make unknown unit\n')
             }
         case CommandKind::SELECT
-            printf('Select\n')
+            printf('Select %d units\n', (this as *SelectCommand).count)
         default
             printf('Unknown Command in print()\n')
         }
@@ -147,6 +159,7 @@ struct Command (command_kind CommandKind) {
             select.base = htonl(select.base)
         default
             printf('INTERNAL ERROR: Command.convert(%s) got unknown CommandKind %08X %08X\n', from_host_to_network ? 'true' : 'false', command_kind as uint, htonl(command_kind as uint))
+            exit(1)
         }
         #end
     }
@@ -196,6 +209,19 @@ struct Actions (first_command *Command, size, count usize) {
         memcpy((this.first_command as *ubyte) at this.size, command, command_size)
         this.size += command_size
         this.count++
+        
+        #if enable_debug_logging
+        duplicate *Command = cast *Command (new ubyte * command_size)
+        defer delete duplicate
+        
+        memcpy(duplicate as *ubyte, command, command_size)
+        duplicate.hton()
+        duplicate.ntoh()
+        
+        if memcmp((this.first_command as *ubyte) at (this.size - command_size), duplicate, command_size) != 0 {
+            printf('htonntoh test failed for %d\n', duplicate.command_kind as int)
+        }
+        #end
     }
     
     func addBuildCommand(team int, kind BuildingKind, x, y float) {
@@ -260,7 +286,7 @@ struct Actions (first_command *Command, size, count usize) {
                 }
                 
                 *next_id_to_write = id - min_unit_id
-                next_id_to_write = cast *uint (next_id_to_write + sizeof uint as ptr)
+                next_id_to_write = cast *uint (next_id_to_write as *ubyte + sizeof uint as ptr)
             }
         }
         
@@ -286,23 +312,44 @@ struct Actions (first_command *Command, size, count usize) {
     }
     
     func hton {
+        debug('hton {\n')
+        defer debug('hton }\n')
+        
+        if this.size == 0, return
+        
         #if __little_endian__
         command *Command = this.first_command
         while command {
+            debug('interate() {\n')
+            next *Command = this.iterate(command)
+            debug('interate() }\n')
             command.hton()
-            command = this.iterateWithHeadSizeInNetworkOrder(command)
+            command = next
         }
         #end
+        
+        // Hack: Compiler doesn't handle defer statements with functions ending with #end correctly
+        return
     }
     
     func ntoh {
+        debug('ntoh {\n')
+        defer debug('ntoh }\n')
+        
+        if this.size == 0, return
+        
         #if __little_endian__
         command *Command = this.first_command
         while command {
             command.ntoh()
+            debug('interate() {\n')
             command = this.iterate(command)
+            debug('interate() }\n')
         }
         #end
+        
+        // Hack: Compiler doesn't handle defer statements with functions ending with #end correctly
+        return
     }
     
     func iterate(head *Command) *Command {
@@ -310,13 +357,8 @@ struct Actions (first_command *Command, size, count usize) {
         return head as *ubyte == this.first_command as *ubyte + this.size as ptr ? null as *Command : head
     }
     
-    func iterateWithHeadSizeInNetworkOrder(head *Command) *Command {
-        head_size usize = head.getSizeFromNetworkOrdered()
-        head = cast *Command (head as *ubyte + head_size as ptr)
-        return head as *ubyte == this.first_command as *ubyte + this.size as ptr ? null as *Command : head
-    }
-    
     func transferToNetworkStream(stream *NetworkStream) {
+        if this.size != 0, debug('transferToNetworkStream(%d)\n', this.size as int)
         this.hton()
         stream.write(this.first_command as *ubyte, this.size)
     }
@@ -330,6 +372,8 @@ struct Actions (first_command *Command, size, count usize) {
     }
     
     func print {
+        if this.size == 0, return
+        
         command *Command = this.first_command
         while command {
             command.print()
@@ -338,6 +382,8 @@ struct Actions (first_command *Command, size, count usize) {
     }
     
     func execute {
+        if this.size == 0, return
+        
         command *Command = this.first_command
         while command {
             command.execute()
@@ -346,6 +392,8 @@ struct Actions (first_command *Command, size, count usize) {
     }
     
     func countQueuedUnits(team int, kind UnitKind) usize {
+        if this.size == 0, return 0
+        
         queued usize = 0
         command *Command = this.first_command
         while command {

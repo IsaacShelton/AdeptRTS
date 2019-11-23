@@ -67,8 +67,11 @@ struct Turn (server, client Actions, hasServer, hasClient bool) {
     }
     
     func perform {
+        debug('Executing Server Commands:\n')
         this.server.execute()
+        debug('Executing Client Commands:\n')
         this.client.execute()
+        debug('Done Executing\n')
     }
     
     func feedInternal(we_are_server bool, actions Actions) {

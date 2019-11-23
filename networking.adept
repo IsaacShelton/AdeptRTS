@@ -252,7 +252,6 @@ func transmission(socket Socket, is_server bool) {
                 if contents_length != 0, if send(socket, contents, contents_length, 0) < 0,
                     printf('send(contents) failed\n'); return
             }
-            ostream.clear()
         }
     }
     

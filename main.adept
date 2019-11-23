@@ -1,13 +1,14 @@
 
-#set fast_build_times false
-#set multiple_raiders false
-#set multiple_marksmen false
-#set multiple_guardians false
-#set enable_developer_features true
-#set recording_add_helpers false
-#set fullscreen false
-#set windows_release_build false
-#set music_enabled false
+#set fullscreen                true
+#set music_enabled             true
+#set fast_build_times          false
+#set multiple_raiders          false
+#set multiple_marksmen         false
+#set multiple_guardians        false
+#set enable_debug_logging      false
+#set recording_add_helpers     false
+#set windows_release_build     false
+#set enable_developer_features false
 
 import '2.2/List.adept'
 import '2.2/audio.adept'
@@ -185,6 +186,9 @@ func onSetup {
     gamedata.ostream.create()
     gamedata.recording = false
     gamedata.record = null
+    
+    gamedata.istream.debug_name = 'istream'
+    gamedata.ostream.debug_name = 'ostream'
     
     gamedata.music_player.load(assetsFolder + "music.wav", true, 1.0f)
     
@@ -469,8 +473,16 @@ func onStep {
     // Read from input network stream
     if gamedata.turn_queue.waitingOnNetwork() {
         if gamedata.istream.read(undef contents *ubyte, undef contents_length usize) {
+            #if enable_debug_logging
+            printf('gamedata.istream.read contents (contents_length = %d) {\n', contents_length as int)
+            repeat contents_length, printf('%02X ', contents[idx] as int)
+            printf('gamedata.istream.read contents }\n')
+            #end
+            
             // Ownership of 'contents' is given away
+            debug('gamedata.turn_queue.feedExternal(contents, contents_length) {\n')
             gamedata.turn_queue.feedExternal(contents, contents_length)
+            debug('gamedata.turn_queue.feedExternal(contents, contents_length) }\n')
         }
     }
     
@@ -488,7 +500,9 @@ func onStep {
         if gamedata.winner != 0, gamedata.actions.clear()
         
         // The local user can't do anything the first turn
+        debug('gamedata.actions.transferToNetworkStream(&gamedata.ostream) {\n')
         gamedata.actions.transferToNetworkStream(&gamedata.ostream)
+        debug('gamedata.actions.transferToNetworkStream(&gamedata.ostream) }\n')
         
         // Record actions if recording
         if gamedata.recording {
@@ -519,7 +533,9 @@ func onStep {
         }
         
         // Feed actions to internal turn queue
+        debug('gamedata.actions.ntoh() {\n')
         gamedata.actions.ntoh() // Hack
+        debug('gamedata.actions.ntoh() }\n')
         gamedata.turn_queue.feedInternal(gamedata.actions)
         
         // If in single player game, have the other player not take any actions
@@ -893,6 +909,15 @@ func onKey(key, scancode, action, mods int) {
             return
         }
         
+        if key == GLFW_KEY_BACKSPACE {
+            // Allow exiting with backspace regardless of whether someone has won or not
+            pthread_mutex_lock(&gamedata.networking_mutex)
+            gamedata.networking_thread_should_close = true
+            pthread_mutex_unlock(&gamedata.networking_mutex)
+            pthread_join(gamedata.networking_thread, null)
+            createNewGame()
+        }
+        
         // Somebody won, nothing to do
         if gamedata.winner != 0, return
         
@@ -920,12 +945,7 @@ func onKey(key, scancode, action, mods int) {
                 gamedata.team = gamedata.team == 1 ? 2 : 1
             }
             #end
-        case GLFW_KEY_BACKSPACE
-            pthread_mutex_lock(&gamedata.networking_mutex)
-            gamedata.networking_thread_should_close = true
-            pthread_mutex_unlock(&gamedata.networking_mutex)
-            pthread_join(gamedata.networking_thread, null)
-            createNewGame()
+            
         #if enable_developer_features
         case GLFW_KEY_BACKSLASH, gamedata.artificial_wait = !gamedata.artificial_wait
         case GLFW_KEY_ENTER, gamedata.show_tick_id = !gamedata.show_tick_id
@@ -1078,4 +1098,28 @@ func drawTexture(texture POD CaptTexture, x, y, w, h, health_percent, progress_p
     if health_percent != 1.0f, captDrawTexture(textures.health, x, y - 16.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w * health_percent, 4.0f)
     if health_percent != 1.0f, captDrawTexture(textures.select, x, y - 16.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w, 4.0f)
     if progress_percent != 0.0f, captDrawTexture(textures.select, x, y - 10.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w * progress_percent, 4.0f)
+}
+
+func debug(format *ubyte) void {
+    #if enable_debug_logging
+    printf(message)
+    #end
+}
+
+func debug(format *ubyte, one $A) void {
+    #if enable_debug_logging
+    printf(message, one)
+    #end
+}
+
+func debug(format *ubyte, one $A, two $B) void {
+    #if enable_debug_logging
+    printf(message, one, two)
+    #end
+}
+
+func debug(format *ubyte, one $A, two $B, three $C) void {
+    #if enable_debug_logging
+    printf(message, one, two, three)
+    #end
 }
