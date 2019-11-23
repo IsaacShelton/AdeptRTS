@@ -1,0 +1,28 @@
+
+import 'main.adept'
+
+func checksum(this *GameData) ubyte {
+    address ulong = 0
+    each Building in this.buildings {
+        address = hashStruct(address, &it)
+    }
+    each Unit in this.units {
+        address = hashStruct(address, &it)
+    }
+    address = hashStruct(address, &this.next_id)
+    return (address % 256) as ubyte
+}
+
+func hash(start ulong, data *ubyte, length usize) ulong = sdbm(start, data, length)
+
+func sdbm(start ulong, data *ubyte, length usize) ulong {
+    address ulong = start
+    repeat length {
+        address = data[idx] + (address <<< 6) + (address <<< 16) - address
+    }
+    return address
+}
+
+func hashStruct(address ulong, structure *$T) ulong {
+    return hash(address, structure as *ubyte, sizeof $T)
+}

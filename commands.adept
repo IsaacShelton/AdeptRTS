@@ -357,17 +357,21 @@ struct Actions (first_command *Command, size, count usize) {
         return head as *ubyte == this.first_command as *ubyte + this.size as ptr ? null as *Command : head
     }
     
-    func transferToNetworkStream(stream *NetworkStream) {
+    func transferToNetworkStream(stream *NetworkStream, checksum ubyte) {
         if this.size != 0, debug('transferToNetworkStream(%d)\n', this.size as int)
         this.hton()
-        stream.write(this.first_command as *ubyte, this.size)
+        
+        stream.writeFrame(this.size + 1)
+        stream.writeRaw(&checksum, sizeof ubyte)
+        stream.writeRaw(this.first_command as *ubyte, this.size)
     }
     
     func transferFromNetworkBuffer(buffer *ubyte, length usize) {
         this.destroy()
-        this.first_command = buffer as *Command
+        this.first_command = (new *ubyte * length) as *Command
         this.size = length
         this.count = 0
+        memcpy(this.first_command as *ubyte, buffer, length)
         this.ntoh()
     }
     

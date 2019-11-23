@@ -29,12 +29,16 @@ struct TurnQueue (turns 3 Turn, is_server bool) {
         this.shift()
     }
     
-    func feedInternal(actions Actions) {
-        this.turns[2].feedInternal(this.is_server, actions)
+    func feedInternal(actions Actions, checksum ubyte) {
+        this.turns[2].feedInternal(this.is_server, actions, checksum)
     }
     
     func feedExternal(data *ubyte, length usize) {
         this.turns[1].feedExternal(this.is_server, data, length)
+    }
+    
+    func feedBlankExternal {
+        this.turns[1].feedBlankExternal(this.is_server)
     }
     
     func printSummary {
@@ -53,12 +57,13 @@ struct TurnQueue (turns 3 Turn, is_server bool) {
     func waitingOnNetwork bool = this.is_server ? !this.turns[1].hasClient : !this.turns[1].hasServer
 }
 
-struct Turn (server, client Actions, hasServer, hasClient bool) {
+struct Turn (server, client Actions, hasServer, hasClient bool, checksum ubyte) {
     func zero {
         this.server.zero()
         this.client.zero()
         this.hasServer = false
         this.hasClient = false
+        this.checksum = 0
     }
     
     func destroy {
@@ -74,7 +79,7 @@ struct Turn (server, client Actions, hasServer, hasClient bool) {
         debug('Done Executing\n')
     }
     
-    func feedInternal(we_are_server bool, actions Actions) {
+    func feedInternal(we_are_server bool, actions Actions, checksum ubyte) {
         if we_are_server ? this.hasServer : this.hasClient,
             printf('INTERNAL ERROR: Turn.feedInternal() called when actions already present for \'%s\'\n', we_are_server ? 'server' : 'client'); return
         
@@ -85,17 +90,45 @@ struct Turn (server, client Actions, hasServer, hasClient bool) {
             this.client = actions
             this.hasClient = true
         }
+        
+        this.checksum = checksum
     }
     
     func feedExternal(we_are_server bool, data *ubyte, length usize) {
         if we_are_server ? this.hasClient : this.hasServer,
             printf('INTERNAL ERROR: Turn.feedExternal() called when actions already present for partner \'%s\'\n', we_are_server ? 'client' : 'server'); return
         
+        if length == 0 {
+            printf('INTERNAL ERROR: Turn.feedExternal() received zero length message\n')
+            return
+        }
+        
+        if this.checksum != data[0] {
+            gamedata.text.destroy()
+            gamedata.text = text("Out of Sync", 14.0f);
+            gamedata.text_timer = 60
+            
+            printf('INTERNAL ERROR: feedExternal() checksum mismatch\n')
+        }
+        
         if we_are_server {
-            this.client.transferFromNetworkBuffer(data, length)
+            this.client.transferFromNetworkBuffer(data at 1, length - 1)
             this.hasClient = true
         } else {
-            this.server.transferFromNetworkBuffer(data, length)
+            this.server.transferFromNetworkBuffer(data at 1, length - 1)
+            this.hasServer = true
+        }
+    }
+    
+    func feedBlankExternal(we_are_server bool) {
+        if we_are_server ? this.hasClient : this.hasServer,
+            printf('INTERNAL ERROR: Turn.feedExternal() called when actions already present for partner \'%s\'\n', we_are_server ? 'client' : 'server'); return
+        
+        if we_are_server {
+            this.client.transferFromNetworkBuffer(null, 0)
+            this.hasClient = true
+        } else {
+            this.server.transferFromNetworkBuffer(null, 0)
             this.hasServer = true
         }
     }

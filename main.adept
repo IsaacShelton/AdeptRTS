@@ -1,5 +1,5 @@
 
-#set fullscreen                true
+#set fullscreen                false
 #set music_enabled             true
 #set fast_build_times          false
 #set multiple_raiders          false
@@ -27,6 +27,7 @@ import 'NetworkStream.adept'
 import 'commands.adept'
 import 'networking.adept'
 import 'where.adept'
+import 'hash.adept'
 
 struct Textures (
     swamp,
@@ -473,6 +474,8 @@ func onStep {
     // Read from input network stream
     if gamedata.turn_queue.waitingOnNetwork() {
         if gamedata.istream.read(undef contents *ubyte, undef contents_length usize) {
+            defer delete contents
+            
             #if enable_debug_logging
             printf('gamedata.istream.read contents (contents_length = %d) {\n', contents_length as int)
             repeat contents_length, printf('%02X ', contents[idx] as int)
@@ -487,6 +490,8 @@ func onStep {
     }
     
     if gamedata.tick_id % 5 == 0 {
+        debug('gamedata.hash(%d) -> %08X\n', gamedata.tick_id as int, gamedata.checksum() as int)
+        
         if gamedata.turn_queue.waitingOnNetwork() || gamedata.artificial_wait {
             gamedata.text.destroy()
             gamedata.text = text("Waiting on network", 14.0f);
@@ -501,7 +506,7 @@ func onStep {
         
         // The local user can't do anything the first turn
         debug('gamedata.actions.transferToNetworkStream(&gamedata.ostream) {\n')
-        gamedata.actions.transferToNetworkStream(&gamedata.ostream)
+        gamedata.actions.transferToNetworkStream(&gamedata.ostream, gamedata.checksum())
         debug('gamedata.actions.transferToNetworkStream(&gamedata.ostream) }\n')
         
         // Record actions if recording
@@ -536,11 +541,11 @@ func onStep {
         debug('gamedata.actions.ntoh() {\n')
         gamedata.actions.ntoh() // Hack
         debug('gamedata.actions.ntoh() }\n')
-        gamedata.turn_queue.feedInternal(gamedata.actions)
+        gamedata.turn_queue.feedInternal(gamedata.actions, gamedata.checksum())
         
         // If in single player game, have the other player not take any actions
         if gamedata.is_single_player && gamedata.turn_queue.waitingOnNetwork() && gamedata.istream.getLength() == 0 {
-            gamedata.turn_queue.feedExternal(null, 0)
+            gamedata.turn_queue.feedBlankExternal()
         }
         
         gamedata.actions.first_command = null
