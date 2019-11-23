@@ -11,6 +11,12 @@ func checksum(this *GameData) ubyte {
     }
     address = hashStruct(address, &this.next_id)
     
+    return (address % 256) as ubyte
+}
+
+func debugChecksum(this *GameData) {
+    address ulong = this.checksum() as ulong
+    
     #if debug_checksum
     buildings_hash ulong = 0
     each Building in this.buildings, buildings_hash = hashStruct(buildings_hash, &it)
@@ -18,18 +24,32 @@ func checksum(this *GameData) ubyte {
     units_hash ulong = 0
     each Unit in this.units, units_hash = hashStruct(units_hash, &it)
     
-    printf('HASH INFO for 0x%02X:\n', (address % 256) as ubyte as int)
-    printf('buildings (hash: %02X): ', buildings_hash)
-    each Building in this.buildings, printf('{%s, %d, %d, %f} ', buildKindName(it.kind), it.team as int, it.health as int, it.progress as double)
-    printf('\n')
-    printf('units (hash: %02X): ', units_hash)
-    each Unit in this.units, printf('%d ', it.id as int)
-    printf('\n')
-    printf('next_id = %d\n', this.next_id as int)
-    printf('--------------------\n', units_hash)
-    #end
+    tmp 256 ubyte
     
-    return (address % 256) as ubyte
+    string String
+    sprintf(&tmp as *ubyte, 'HASH INFO for 0x%02X:\n', (address % 256) as ubyte as int)
+    string = string + stringConstant(&tmp as *ubyte)
+    sprintf(&tmp as *ubyte, 'buildings (hash: %02X): ', buildings_hash)
+    string = string + stringConstant(&tmp as *ubyte)
+    
+    each Building in this.buildings {
+        sprintf(&tmp as *ubyte, '{%s, %d, %d, %f} ', buildKindName(it.kind), it.team as int, it.health as int, it.progress as double)
+        string = string + stringConstant(&tmp as *ubyte)
+    }
+    
+    sprintf(&tmp as *ubyte, '\nunits (hash: %02X): ', units_hash)
+    string = string + stringConstant(&tmp as *ubyte)
+    
+    each Unit in this.units {
+        sprintf(&tmp as *ubyte, '%d ', it.id as int)
+        string = string + stringConstant(&tmp as *ubyte)
+    }
+    
+    sprintf(&tmp as *ubyte, '\nnext_id = %d\n--------------------\n', this.next_id as int)
+    string = string + stringConstant(&tmp as *ubyte)
+    this.hash_info_list.add(string.commit())
+    if this.hash_info_list.length > 3, this.hash_info_list.remove(0)
+    #end
 }
 
 func hash(start ulong, data *ubyte, length usize) ulong = sdbm(start, data, length)

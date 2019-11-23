@@ -1,5 +1,5 @@
 
-#set fullscreen                true
+#set fullscreen                false
 #set music_enabled             true
 #set fast_build_times          false
 #set multiple_raiders          false
@@ -98,7 +98,8 @@ struct GameData (
     punch Sound,
     arrow Sound,
     sfx 200 SoundPlayer,
-    textures_original Textures
+    textures_original Textures,
+    hash_info_list <String> List
 )
 
 textures Textures
@@ -555,6 +556,7 @@ func onStep {
         gamedata.actions.ntoh() // Hack
         debug('gamedata.actions.ntoh() }\n')
         gamedata.turn_queue.feedInternal(gamedata.actions, gamedata.checksum())
+        gamedata.debugChecksum()
         
         // If in single player game, have the other player not take any actions
         if gamedata.is_single_player && gamedata.turn_queue.waitingOnNetwork() && gamedata.istream.getLength() == 0 {
