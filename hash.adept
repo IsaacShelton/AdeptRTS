@@ -48,7 +48,7 @@ func debugChecksum(this *GameData) {
     sprintf(&tmp as *ubyte, '\nnext_id = %d\n--------------------\n', this.next_id as int)
     string = string + stringConstant(&tmp as *ubyte)
     this.hash_info_list.add(string.commit())
-    if this.hash_info_list.length > 3, this.hash_info_list.remove(0)
+    if this.hash_info_list.length > 3, this.hash_info_list.remove(0uz)
     #end
 }
 
