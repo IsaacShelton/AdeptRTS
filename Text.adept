@@ -2,7 +2,7 @@
 FONT_TEXTURE_WIDTH == 384.0f
 FONT_TEXTURE_HEIGHT == 8.0f
 
-struct Text (model CaptModel) {
+struct Text (model CaptModel, has bool) {
     func draw(x, y, z float) {
         transformation Matrix4f = undef
         transformation.translateFromIdentity(x, y, z)
@@ -12,7 +12,12 @@ struct Text (model CaptModel) {
     }
     
     func destroy {
+        unless this.has {
+            printf('INTERNAL ERROR: Text.destroy() called when nothing preset\n')
+        }
+        
         this.model.free()
+        this.has = false
     }
 }
 
@@ -50,6 +55,7 @@ func text(content String, scale double) Text {
     
     text Text = undef
     text.model.create(vertices.items, vertices.length, uvs.items, uvs.length)
+    text.has = true
     return text
 }
 

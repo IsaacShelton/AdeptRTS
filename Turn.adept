@@ -84,7 +84,7 @@ struct Turn (server, client Actions, hasServer, hasClient bool, checksum ubyte) 
             printf('INTERNAL ERROR: Turn.feedInternal() called when actions already present for \'%s\'\n', we_are_server ? 'server' : 'client'); return
         
         if we_are_server {
-            this.server = actions
+            this.server = actions 
             this.hasServer = true
         } else {
             this.client = actions

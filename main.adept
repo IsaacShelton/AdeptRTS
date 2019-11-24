@@ -46,7 +46,10 @@ struct Textures (
     marksmen, marksmen_blue, marksmen_red, marksmen_attack, marksmen_attack_blue, marksmen_attack_red,
     guardian, guardian_blue, guardian_red, guardian_attack, guardian_attack_blue, guardian_attack_red,
     font CaptTexture
-)
+) {
+    func __array__ *CaptTexture = this as *CaptTexture
+    func __length__ usize = sizeof Textures / sizeof CaptTexture
+}
 
 struct GameData (
     cameraX, cameraY, cameraSpeed float,
@@ -99,7 +102,8 @@ struct GameData (
     arrow Sound,
     sfx 200 SoundPlayer,
     textures_original Textures,
-    hash_info_list <String> List
+    hash_info_list <String> List,
+    random_actions bool
 )
 
 textures Textures
@@ -183,6 +187,7 @@ func onSetup {
     gamedata.resources_text = text("", 14.0f)
     gamedata.tick_id_text = text("", 14.0f)
     gamedata.winner_text = text("", 20.0f)
+    gamedata.creating_game_text = text("", 14.0f)
     
     createNewGame()
     pthread_mutex_init(&gamedata.networking_mutex, null)
@@ -253,6 +258,7 @@ func setupGameState {
     gamedata.actions.clear()
     gamedata.turn_queue.create()
     gamedata.artificial_wait = false
+    gamedata.random_actions = false
 }
 
 func playSFX(this *GameData, sound Sound) {
@@ -324,6 +330,8 @@ func onExit {
     gamedata.punch.destroy()
     gamedata.arrow.destroy()
     audioTerminate()
+    
+    each CaptTexture in textures, it.destroy()
 }
 
 func placingMine(team int) {
@@ -512,6 +520,12 @@ func onStep {
             gamedata.text_timer = 60
             return // Don't advance until we're not waiting on the network
         }
+        
+        #if debug_checksum
+        if gamedata.random_actions {
+            gamedata.actions.addRandomCommand(gamedata.team)
+        }
+        #end
         
         gamedata.turn_queue.performAndShift()
         
@@ -986,6 +1000,15 @@ func onKey(key, scancode, action, mods int) {
                 fclose(input_recording)
                 gamedata.istream.writeRaw(buffer, size)
             }
+        #end
+        
+        #if debug_checksum
+        case GLFW_KEY_F3
+            each String in gamedata.hash_info_list {
+                print(it)
+            }
+        case GLFW_KEY_F4
+            gamedata.random_actions = !gamedata.random_actions
         #end
         }
         

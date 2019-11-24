@@ -311,6 +311,25 @@ struct Actions (first_command *Command, size, count usize) {
         this.addCommand(&command as *Command)
     }
     
+    func addRandomCommand(team int) {
+        repeat rand() % 5, switch rand() % 4 {
+        case 0
+            this.addBuildCommand(team, (rand() % 4) as BuildingKind, (rand() % (960 * 2) - 960) as float, (rand() % (960 * 2) - 960) as float)
+            return
+        case 1
+            this.addMakeCommand(team, (rand() % 3 + 1) as UnitKind)
+            return
+        case 2
+            this.addMoveCommand(team, (rand() % (960 * 2) - 960) as float, (rand() % (960 * 2) - 960) as float)
+            return
+        case 3
+            bytes 32 ubyte
+            each Unit in gamedata.units, if it.team == gamedata.team && rand() % 2 == 0, setBit(&bytes, idx)
+            this.addSelectCommand(team, bytes)
+            return
+        }
+    }
+    
     func hton {
         debug('hton {\n')
         defer debug('hton }\n')
