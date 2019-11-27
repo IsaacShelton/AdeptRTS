@@ -314,6 +314,10 @@ struct Actions (first_command *Command, size, count usize) {
     func addRandomCommand(team int) {
         repeat rand() % 5, switch rand() % 4 {
         case 0
+            if gamedata.buildings.length > 512 {
+                gamedata.too_many_buildings = true
+                return
+            }
             this.addBuildCommand(team, (rand() % 4) as BuildingKind, (rand() % (960 * 2) - 960) as float, (rand() % (960 * 2) - 960) as float)
             return
         case 1

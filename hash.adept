@@ -17,7 +17,7 @@ func checksum(this *GameData) ubyte {
 func debugChecksum(this *GameData) {
     address ulong = this.checksum() as ulong
     
-    string String
+    result String = ""
     
     #if debug_checksum
     buildings_hash ulong = 0
@@ -26,29 +26,33 @@ func debugChecksum(this *GameData) {
     units_hash ulong = 0
     each Unit in this.units, units_hash = hashStruct(units_hash, &it)
     
-    tmp 256 ubyte
+    tmp 1024 ubyte
     
     sprintf(&tmp as *ubyte, 'HASH INFO for 0x%02X:\n', (address % 256) as ubyte as int)
-    string = string + stringConstant(&tmp as *ubyte)
+    result = result + string(&tmp as *ubyte)
     sprintf(&tmp as *ubyte, 'buildings (hash: %02X): ', buildings_hash)
-    string = string + stringConstant(&tmp as *ubyte)
+    result = result + string(&tmp as *ubyte)
     
     each Building in this.buildings {
-        sprintf(&tmp as *ubyte, '{%s, %d, %d, %f} ', buildKindName(it.kind), it.team as int, it.health as int, it.progress as double)
-        string = string + stringConstant(&tmp as *ubyte)
+        // (kind BuildingKind, texture CaptTexture, x, y, w, h float, health, max_health, team int, progress float)
+        sprintf(&tmp as *ubyte, '{%s, %d, %f, %f, %f, %f, %d, %d, %d, %f} ', buildKindName(it.kind), it.texture.id as int,
+            it.x as double, it.y as double, it.w as double, it.h as double, it.health as int, it.max_health as int, it.team as int, it.progress as double)
+        result = result + string(&tmp as *ubyte)
     }
     
     sprintf(&tmp as *ubyte, '\nunits (hash: %02X): ', units_hash)
-    string = string + stringConstant(&tmp as *ubyte)
+    result = result + string(&tmp as *ubyte)
     
     each Unit in this.units {
         sprintf(&tmp as *ubyte, '%d ', it.id as int)
-        string = string + stringConstant(&tmp as *ubyte)
+        result = result + string(&tmp as *ubyte)
     }
     
     sprintf(&tmp as *ubyte, '\nnext_id = %d\n--------------------\n', this.next_id as int)
-    string = string + stringConstant(&tmp as *ubyte)
-    this.hash_info_list.add(string.commit())
+    result = result + string(&tmp as *ubyte)
+    
+    this.hash_info_list.add(result.commit())
+    
     if this.hash_info_list.length > 3 {
         this.hash_info_list.remove(0uz)
     }

@@ -1,6 +1,7 @@
 
-#set fullscreen                true
-#set music_enabled             true
+#set fullscreen                false
+#set music_enabled             false
+#set sfx_enabled               true
 #set fast_build_times          false
 #set multiple_raiders          false
 #set multiple_marksmen         false
@@ -9,7 +10,8 @@
 #set recording_add_helpers     false
 #set windows_release_build     false
 #set enable_developer_features false
-#set debug_checksum            true
+#set debug_checksum            false
+#set debug_random_actions      true
 
 import '2.2/List.adept'
 import '2.2/audio.adept'
@@ -85,6 +87,8 @@ struct GameData (
     winner int,
     winner_text Text,
     is_single_player bool,
+    too_many_units bool,
+    too_many_buildings bool,
     
     networking_thread pthread_t,
     networking_mutex pthread_mutex_t,
@@ -262,12 +266,14 @@ func setupGameState {
 }
 
 func playSFX(this *GameData, sound Sound) {
+    #if sfx_enabled
     repeat 200 {
         unless this.sfx[idx].isPlaying() {
             this.sfx[idx].play(sound)
             return
         }
     }
+    #end
 }
 
 func createNewGame() {
@@ -287,6 +293,8 @@ func createNewGame() {
     gamedata.winner_text.destroy()
     gamedata.winner_text = text("", 20.0f)
     gamedata.is_single_player = false
+    gamedata.too_many_units = false
+    gamedata.too_many_buildings = false
     
     gamedata.waiting_for_connection = true
     gamedata.networking_thread_should_close = false
@@ -521,7 +529,7 @@ func onStep {
             return // Don't advance until we're not waiting on the network
         }
         
-        #if debug_checksum
+        #if debug_random_actions
         if gamedata.random_actions {
             gamedata.actions.addRandomCommand(gamedata.team)
         }
@@ -603,9 +611,7 @@ func tick {
             if it.progress >= 1.0f {
                 if gamedata.units.length >= 256 {
                     it.progress = 1.0f
-                    gamedata.text.destroy()
-                    gamedata.text = text("Too many units", 14.0f);
-                    gamedata.text_timer = 60
+                    gamedata.too_many_units = true
                 } else {
                     raiderUnit(it.x + it.w/2 - 10.0f, it.y + it.h, it.team)
                     #if multiple_raiders
@@ -776,6 +782,26 @@ func tick {
         }
     }
     
+    gamedata.too_many_buildings = gamedata.buildings.length >= 512
+    
+    if gamedata.too_many_units {
+        if gamedata.too_many_buildings {
+            gamedata.text.destroy()
+            gamedata.text = text("Too many units and buildings", 14.0f);
+            gamedata.text_timer = 60
+        } else {
+            gamedata.text.destroy()
+            gamedata.text = text("Too many units", 14.0f);
+            gamedata.text_timer = 60
+        }
+    } else if gamedata.too_many_buildings {
+        gamedata.text.destroy()
+        gamedata.text = text("Too many buildings", 14.0f);
+        gamedata.text_timer = 60
+    }
+    
+    gamedata.too_many_units = false
+    gamedata.too_many_buildings = false
     gamedata.tick_id++
 }
 
@@ -785,6 +811,8 @@ func onClick(mouseX, mouseY float, button int) {
     
     if button == 1 {
         if gamedata.is_placing {
+            if gamedata.buildings.length >= 512, return
+            
             gamedata.placing.x = mouseX - gamedata.placing.w / 2.0f + gamedata.cameraX
             gamedata.placing.y = mouseY - gamedata.placing.h / 2.0f + gamedata.cameraY
             
@@ -799,7 +827,6 @@ func onClick(mouseX, mouseY float, button int) {
             case BuildingKind::RANGE,   if notEnoughMoney(10), return
             case BuildingKind::CLUB,    if notEnoughMoney(10), return
             }
-            
             
             gamedata.actions.addBuildCommand(gamedata.team, gamedata.placing.kind, gamedata.placing.x, gamedata.placing.y)
             gamedata.is_placing = false
@@ -1007,6 +1034,8 @@ func onKey(key, scancode, action, mods int) {
             each String in gamedata.hash_info_list {
                 print(it)
             }
+        #end
+        #if debug_random_actions
         case GLFW_KEY_F4
             gamedata.random_actions = !gamedata.random_actions
         #end
@@ -1145,25 +1174,25 @@ func drawTexture(texture POD CaptTexture, x, y, w, h, health_percent, progress_p
 
 func debug(format *ubyte) void {
     #if enable_debug_logging
-    printf(message)
+    printf(format)
     #end
 }
 
 func debug(format *ubyte, one $A) void {
     #if enable_debug_logging
-    printf(message, one)
+    printf(format, one)
     #end
 }
 
 func debug(format *ubyte, one $A, two $B) void {
     #if enable_debug_logging
-    printf(message, one, two)
+    printf(format, one, two)
     #end
 }
 
 func debug(format *ubyte, one $A, two $B, three $C) void {
     #if enable_debug_logging
-    printf(message, one, two, three)
+    printf(format, one, two, three)
     #end
 }
 

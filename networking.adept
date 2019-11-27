@@ -15,6 +15,7 @@ func startServer {
     gamedata.team = 1
     gamedata.cameraX = gamedata.minX
     gamedata.turn_queue.is_server = true
+    srand(time(null))
     pthread_create(&gamedata.networking_thread, null, func &server, null)
 }
 
