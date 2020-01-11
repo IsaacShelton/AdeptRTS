@@ -3,9 +3,9 @@ FONT_TEXTURE_WIDTH == 384.0f
 FONT_TEXTURE_HEIGHT == 8.0f
 
 struct Text (model CaptModel, has bool) {
-    func draw(x, y, z float) {
+    func draw(x, y float) {
         transformation Matrix4f = undef
-        transformation.translateFromIdentity(x, y, z)
+        transformation.translateFromIdentity(x, y, 0.0f)
         _captain_shader.uploadMatrix4f(_captain_shader_transformation_location, transformation)
         captBindTexture(textures.font)
         this.model.draw()

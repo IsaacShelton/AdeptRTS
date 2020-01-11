@@ -1,5 +1,5 @@
 
-#set fullscreen                false
+#set fullscreen                true
 #set music_enabled             false
 #set sfx_enabled               true
 #set fast_build_times          false
@@ -76,6 +76,7 @@ struct GameData (
     actions Actions,
     turn_queue TurnQueue,
     artificial_wait bool,
+    draw_order <DrawWithBarsData> List,
     
     // Creating Game
     creating_game bool,
@@ -140,19 +141,19 @@ func onSetup {
     #end
     
     captCustomViewBasedOnHeight(480.0f)
-    textures.swamp = captTexture(assetsFolder + "swamp.png", false)
+    textures.swamp = captTexture(assetsFolder + "swamp.png", true)
     textures.mine = captTexture(assetsFolder + "mine.png", false)
-    textures.mine_blue = captTexture(assetsFolder + "mine_blue.png", false)
-    textures.mine_red = captTexture(assetsFolder + "mine_red.png", false)
+    textures.mine_blue = captTexture(assetsFolder + "mine_blue.png", true)
+    textures.mine_red = captTexture(assetsFolder + "mine_red.png", true)
     textures.outpost = captTexture(assetsFolder + "outpost.png", false)
-    textures.outpost_blue = captTexture(assetsFolder + "outpost_blue.png", false)
-    textures.outpost_red = captTexture(assetsFolder + "outpost_red.png", false)
+    textures.outpost_blue = captTexture(assetsFolder + "outpost_blue.png", true)
+    textures.outpost_red = captTexture(assetsFolder + "outpost_red.png", true)
     textures.range = captTexture(assetsFolder + "range.png", false)
-    textures.range_blue = captTexture(assetsFolder + "range_blue.png", false)
-    textures.range_red = captTexture(assetsFolder + "range_red.png", false)
+    textures.range_blue = captTexture(assetsFolder + "range_blue.png", true)
+    textures.range_red = captTexture(assetsFolder + "range_red.png", true)
     textures.club = captTexture(assetsFolder + "club.png", false)
-    textures.club_blue = captTexture(assetsFolder + "club_blue.png", false)
-    textures.club_red = captTexture(assetsFolder + "club_red.png", false)
+    textures.club_blue = captTexture(assetsFolder + "club_blue.png", true)
+    textures.club_red = captTexture(assetsFolder + "club_red.png", true)
     textures.emptyIcon = captTexture(assetsFolder + "empty_icon.png", false)
     textures.workerIcon = captTexture(assetsFolder + "worker_icon.png", false)
     textures.scoutIcon = captTexture(assetsFolder + "scout_icon.png", false)
@@ -168,11 +169,11 @@ func onSetup {
     textures.progress = captTexture(assetsFolder + "progress.png", false)
     textures.scout = captTexture(assetsFolder + "scout.png", false)
     textures.raider = captTexture(assetsFolder + "raider.png", false)
-    textures.raider_blue = captTexture(assetsFolder + "raider_blue.png", false)
-    textures.raider_red = captTexture(assetsFolder + "raider_red.png", false)
+    textures.raider_blue = captTexture(assetsFolder + "raider_blue.png", true)
+    textures.raider_red = captTexture(assetsFolder + "raider_red.png", true)
     textures.raider_attack = captTexture(assetsFolder + "raider_attack.png", false)
-    textures.raider_attack_blue = captTexture(assetsFolder + "raider_attack_blue.png", false)
-    textures.raider_attack_red = captTexture(assetsFolder + "raider_attack_red.png", false)
+    textures.raider_attack_blue = captTexture(assetsFolder + "raider_attack_blue.png", true)
+    textures.raider_attack_red = captTexture(assetsFolder + "raider_attack_red.png", true)
     textures.marksmen = captTexture(assetsFolder + "marksmen.png", false)
     textures.marksmen_blue = captTexture(assetsFolder + "marksmen_blue.png", false)
     textures.marksmen_red = captTexture(assetsFolder + "marksmen_red.png", false)
@@ -274,6 +275,10 @@ func playSFX(this *GameData, sound Sound) {
         }
     }
     #end
+}
+
+func drawWithBars(this *GameData, texture CaptTexture, x, y, w, h, health_percent, progress_percent float) {
+    this.draw_order.add(drawWithBarsData(y + h, texture, x, y, w, h, health_percent, progress_percent))
 }
 
 func createNewGame() {
@@ -1086,7 +1091,7 @@ func onDraw {
     drawBackground(textures.swamp)
     
     if gamedata.creating_game {
-        gamedata.creating_game_text.draw(4.0f, 4.0f, -0.99f)
+        gamedata.creating_game_text.draw(4.0f, 4.0f)
         return
     } else {
         pthread_mutex_lock(&gamedata.networking_mutex)
@@ -1094,7 +1099,7 @@ func onDraw {
         pthread_mutex_unlock(&gamedata.networking_mutex)
         
         if waiting {
-            gamedata.creating_game_text.draw(4.0f, 4.0f, -0.99f)
+            gamedata.creating_game_text.draw(4.0f, 4.0f)
             return
         }
     }
@@ -1102,19 +1107,19 @@ func onDraw {
     if gamedata.is_placing {
         captMouseViewPosition(undef mouseX float, undef mouseY float)
         captDrawOpacity(0.5f)
-        drawTexture(gamedata.placing.texture, mouseX - gamedata.placing.w / 2.0f, mouseY - gamedata.placing.h / 2.0f, gamedata.placing.w, gamedata.placing.h, 1.0f, 0.0f)
+        gamedata.drawWithBars(gamedata.placing.texture, mouseX - gamedata.placing.w / 2.0f, mouseY - gamedata.placing.h / 2.0f, gamedata.placing.w, gamedata.placing.h, 1.0f, 0.0f)
         captDrawOpacity(1.0f)
     }
     
     if gamedata.is_selecting {
         captDrawOpacity(0.5f * 0.25f)
         captMouseViewPosition(undef mouseX float, undef mouseY float)
-        captDrawTexture(textures.select, gamedata.selectStartX, gamedata.selectStartY, 0.8f, mouseX - gamedata.selectStartX, mouseY - gamedata.selectStartY)
+        captDrawTexture(textures.select, gamedata.selectStartX, gamedata.selectStartY, mouseX - gamedata.selectStartX, mouseY - gamedata.selectStartY)
         captDrawOpacity(1.0f)
     }
     
     each Building in gamedata.buildings {
-        drawTexture(it.texture, it.x - gamedata.cameraX, it.y - gamedata.cameraY, it.w, it.h, it.health as float / it.max_health as float, it.progress)
+        gamedata.drawWithBars(it.texture, it.x - gamedata.cameraX, it.y - gamedata.cameraY, it.w, it.h, it.health as float / it.max_health as float, it.progress)
     }
     
     each Unit in gamedata.units {
@@ -1142,13 +1147,16 @@ func onDraw {
     }
     */
     
-    gamedata.resources_text.draw(4.0f, 4.0f, -0.99f)
-    if gamedata.text_timer != 0, gamedata.text.draw(4.0f, 20.0f, -0.99f)
-    if gamedata.show_tick_id != 0, gamedata.tick_id_text.draw(4.0f, captViewHeight() - 16.0f, -0.99f)
+    gamedata.draw_order.sort()
+    gamedata.draw_order.perform()
+    
+    gamedata.resources_text.draw(4.0f, 4.0f)
+    if gamedata.text_timer != 0, gamedata.text.draw(4.0f, 20.0f)
+    if gamedata.show_tick_id != 0, gamedata.tick_id_text.draw(4.0f, captViewHeight() - 16.0f)
     
     if gamedata.winner != 0 {
         characters int = gamedata.winner == 1 ? 9 : 8
-        gamedata.winner_text.draw(captViewWidth() / 2.0f - 20.0f * ((characters - 1) as float * 6.0f / 7.0f + 5.0f / 7.0f) / 2.0f, captViewHeight() / 2.0f - 20.0f / 2.0f, -0.99f)
+        gamedata.winner_text.draw(captViewWidth() / 2.0f - 20.0f * ((characters - 1) as float * 6.0f / 7.0f + 5.0f / 7.0f) / 2.0f, captViewHeight() / 2.0f - 20.0f / 2.0f)
     }
 }
 
@@ -1159,17 +1167,49 @@ func drawBackground(bg POD CaptTexture) {
             y float = idx as float * 64.0f
             xd float = fmodf(gamedata.cameraX, 64.0f) + (gamedata.cameraX < 0.0f ? 64.0f : 0.0f)
             yd float = fmodf(gamedata.cameraY, 64.0f) + (gamedata.cameraY < 0.0f ? 64.0f : 0.0f)
-            captDrawTexture(bg, x - xd, y - yd, 0.99f, 64.0f, 64.0f)
+            captDrawTexture(bg, x - xd, y - yd, 64.0f, 64.0f)
         }
     }
 }
 
-func drawTexture(texture POD CaptTexture, x, y, w, h, health_percent, progress_percent float) {
+struct DrawWithBarsData (z float, texture CaptTexture, x, y, w, h, health_percent, progress_percent float) {
+    func perform {
+        drawWithBars(this.texture, this.x, this.y, this.w, this.h, this.health_percent, this.progress_percent)
+    }
+}
+
+func drawWithBarsData(z float, texture CaptTexture, x, y, w, h, health_percent, progress_percent float) DrawWithBarsData {
+    d DrawWithBarsData = undef
+    d.z = z
+    d.texture = texture
+    d.x = x
+    d.y = y
+    d.w = w
+    d.h = h
+    d.health_percent = health_percent
+    d.progress_percent = progress_percent
+    return d
+}
+
+func perform(this *<DrawWithBarsData> List) {
+    each DrawWithBarsData in *this, it.perform()
+    this.clear()
+}
+
+func sort(this *<DrawWithBarsData> List) {
+    qsort(this.items, this.length, sizeof DrawWithBarsData, func &sortDrawWithBarsData)
+}
+
+func sortDrawWithBarsData(a, b ptr) int {
+    return (a as *DrawWithBarsData).z < (b as *DrawWithBarsData).z ? -1 : 1
+}
+
+func drawWithBars(texture CaptTexture, x, y, w, h, health_percent, progress_percent float) {
     // Passes 'z' to captDrawTexture
-    captDrawTexture(texture, x, y, 0.25f - (y + h/2)/2 / captViewHeight(), w, h)
-    if health_percent != 1.0f, captDrawTexture(textures.health, x, y - 16.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w * health_percent, 4.0f)
-    if health_percent != 1.0f, captDrawTexture(textures.select, x, y - 16.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w, 4.0f)
-    if progress_percent != 0.0f, captDrawTexture(textures.select, x, y - 10.0f, 0.25f - (y + h/2)/2 / captViewHeight(), w * progress_percent, 4.0f)
+    captDrawTexture(texture, x, y, w, h)
+    //if health_percent != 1.0f, captDrawTexture(textures.select, x, y - 16.0f, w, 4.0f)
+    //if health_percent != 1.0f, captDrawTexture(textures.health, x + 2.0f, y - 16.0f + 1.0f, w * health_percent - 4.0f, 2.0f)
+    if progress_percent != 0.0f, captDrawTexture(textures.select, x, y - 10.0f, w * progress_percent, 4.0f)
 }
 
 func debug(format *ubyte) void {
